@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { PAGE_MIN_ROLE_OPTIONS, type PageMinRole } from "@/lib/pageAccess";
 
 type PendingRequest = { id: string; email: string; requested_role: string };
 
@@ -62,42 +63,113 @@ export function ApprovalsList({ initial }: { initial: PendingRequest[] }) {
   );
 }
 
-type PageAccessRow = { page_key: string; label: string; requires_login: boolean };
+type PageAccessRow = { page_key: string; label: string; min_role: PageMinRole };
 
 export function PageAccessToggles({ initial }: { initial: PageAccessRow[] }) {
   const [rows, setRows] = useState(initial);
   const [busyKey, setBusyKey] = useState<string | null>(null);
 
-  async function toggle(pageKey: string, next: boolean) {
+  async function setMinRole(pageKey: string, next: PageMinRole) {
     setBusyKey(pageKey);
     const supabase = createClient();
     const { error } = await supabase
       .from("page_access")
-      .update({ requires_login: next, updated_at: new Date().toISOString() })
+      .update({ min_role: next, updated_at: new Date().toISOString() })
       .eq("page_key", pageKey);
     setBusyKey(null);
     if (!error) {
-      setRows((rs) => rs.map((r) => (r.page_key === pageKey ? { ...r, requires_login: next } : r)));
+      setRows((rs) => rs.map((r) => (r.page_key === pageKey ? { ...r, min_role: next } : r)));
     }
   }
 
   return (
     <div className="flex flex-col gap-2">
       {rows.map((r) => (
-        <label key={r.page_key} className="flex items-center justify-between text-sm card p-3 cursor-pointer">
+        <div key={r.page_key} className="flex items-center justify-between text-sm card p-3">
           <span>{r.label}</span>
-          <span className="flex items-center gap-2">
-            <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-              {r.requires_login ? "Requires login" : "Public"}
-            </span>
-            <input
-              type="checkbox"
-              checked={r.requires_login}
-              disabled={busyKey === r.page_key}
-              onChange={(e) => toggle(r.page_key, e.target.checked)}
-            />
-          </span>
-        </label>
+          <select
+            value={r.min_role}
+            disabled={busyKey === r.page_key}
+            onChange={(e) => setMinRole(r.page_key, e.target.value as PageMinRole)}
+            className="rounded-md border px-2 py-1 text-xs capitalize"
+            style={{ borderColor: "var(--border-hairline)", background: "var(--page-plane)" }}
+          >
+            {PAGE_MIN_ROLE_OPTIONS.map((opt) => (
+              <option key={opt} value={opt} className="capitalize">
+                {opt === "public" ? "Public (no login)" : `${opt} and above`}
+              </option>
+            ))}
+          </select>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+type UserRow = {
+  id: string;
+  email: string;
+  role: PageMinRole;
+  approved: boolean;
+  requested_role: string | null;
+  created_at: string;
+};
+
+const ASSIGNABLE_ROLES = ["user", "superuser", "admin"] as const;
+
+export function UsersList({
+  initial,
+  currentUserId,
+}: {
+  initial: UserRow[];
+  currentUserId: string;
+}) {
+  const [rows, setRows] = useState(initial);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  async function setRole(id: string, newRole: (typeof ASSIGNABLE_ROLES)[number]) {
+    setBusyId(id);
+    const supabase = createClient();
+    const { error } = await supabase.rpc("admin_set_role", {
+      target_user_id: id,
+      new_role: newRole,
+    });
+    setBusyId(null);
+    if (!error) {
+      setRows((rs) =>
+        rs.map((r) => (r.id === id ? { ...r, role: newRole, requested_role: null } : r))
+      );
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      {rows.map((r) => (
+        <div key={r.id} className="flex items-center justify-between text-sm card p-3">
+          <div>
+            <div>{r.email}</div>
+            <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+              joined {new Date(r.created_at).toLocaleDateString()}
+              {r.requested_role && (
+                <span style={{ color: "var(--status-warning)" }}> · requested {r.requested_role}</span>
+              )}
+            </div>
+          </div>
+          <select
+            value={r.role}
+            disabled={busyId === r.id || r.id === currentUserId}
+            onChange={(e) => setRole(r.id, e.target.value as (typeof ASSIGNABLE_ROLES)[number])}
+            className="rounded-md border px-2 py-1 text-xs capitalize"
+            style={{ borderColor: "var(--border-hairline)", background: "var(--page-plane)" }}
+            title={r.id === currentUserId ? "You can't change your own role" : undefined}
+          >
+            {ASSIGNABLE_ROLES.map((opt) => (
+              <option key={opt} value={opt} className="capitalize">
+                {opt}
+              </option>
+            ))}
+          </select>
+        </div>
       ))}
     </div>
   );

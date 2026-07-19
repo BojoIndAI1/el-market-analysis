@@ -9,6 +9,7 @@ export default function SignupPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [wantsSuperuser, setWantsSuperuser] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [confirmSent, setConfirmSent] = useState(false);
@@ -18,7 +19,11 @@ export default function SignupPage() {
     setLoading(true);
     setError(null);
     const supabase = createClient();
-    const { data, error } = await supabase.auth.signUp({ email, password });
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: wantsSuperuser ? { data: { requested_role: "superuser" } } : undefined,
+    });
     setLoading(false);
     if (error) {
       setError(error.message);
@@ -73,6 +78,17 @@ export default function SignupPage() {
             className="w-full rounded-md border px-3 py-2 text-sm"
             style={{ borderColor: "var(--border-hairline)", background: "var(--page-plane)" }}
           />
+        </label>
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={wantsSuperuser}
+            onChange={(e) => setWantsSuperuser(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span style={{ color: "var(--text-secondary)" }}>
+            Request SuperUser access (subject to admin approval)
+          </span>
         </label>
         {error && (
           <p className="text-sm" style={{ color: "var(--status-critical)" }}>
