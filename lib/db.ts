@@ -264,25 +264,50 @@ export type GeneratorEconomicsCardRow = {
   counterparty_note: string | null;
   card_confidence: string | null;
   source_section: string | null;
+  price_display: string | null;
+  price_approx: string | null;
+  mechanism_label: string | null;
+  mechanism_style: string | null;
+  confidence_label: string | null;
+  confidence_style: string | null;
+  detail_grid: [string, string][] | null;
 };
+
+export type GeneratorEconomicsTierRow = GeneratorEconomicsCardRow & {
+  rank: number | null;
+  min_pillar_pct: number | null;
+};
+
+const GENERATOR_ECONOMICS_COLS = `zone_code, display_name, compensation_regime_basis, exclusive_or_additive,
+            exclusive_or_additive_note, switching_floor_value, switching_floor_note,
+            marginal_cost_note, merchant_share_note, legal_path_note, counterparty,
+            counterparty_note, card_confidence, source_section, price_display, price_approx,
+            mechanism_label, mechanism_style, confidence_label, confidence_style, detail_grid`;
 
 export async function fetchGeneratorEconomicsCards(
   zoneCodes?: string[]
 ): Promise<GeneratorEconomicsCardRow[]> {
   const pool = getPool();
-  const cols = `zone_code, display_name, compensation_regime_basis, exclusive_or_additive,
-            exclusive_or_additive_note, switching_floor_value, switching_floor_note,
-            marginal_cost_note, merchant_share_note, legal_path_note, counterparty,
-            counterparty_note, card_confidence, source_section`;
   if (zoneCodes && zoneCodes.length > 0) {
     const res = await pool.query<GeneratorEconomicsCardRow>(
-      `SELECT ${cols} FROM generator_economics_card WHERE zone_code = ANY($1) ORDER BY zone_code`,
+      `SELECT ${GENERATOR_ECONOMICS_COLS} FROM generator_economics_card WHERE zone_code = ANY($1) ORDER BY zone_code`,
       [zoneCodes]
     );
     return res.rows;
   }
   const res = await pool.query<GeneratorEconomicsCardRow>(
-    `SELECT ${cols} FROM generator_economics_card ORDER BY zone_code`
+    `SELECT ${GENERATOR_ECONOMICS_COLS} FROM generator_economics_card ORDER BY zone_code`
+  );
+  return res.rows;
+}
+
+export async function fetchGeneratorEconomicsTiers(): Promise<GeneratorEconomicsTierRow[]> {
+  const pool = getPool();
+  const res = await pool.query<GeneratorEconomicsTierRow>(
+    `SELECT g.${GENERATOR_ECONOMICS_COLS.split(", ").join(", g.")}, r.rank, r.min_pillar_pct
+       FROM generator_economics_card g
+       LEFT JOIN zone_ranking r ON r.zone_code = g.zone_code
+      ORDER BY (r.rank IS NULL), r.rank, g.zone_code`
   );
   return res.rows;
 }
