@@ -87,6 +87,26 @@ export default function WorldMap({
 
   return (
     <div ref={containerRef} className="relative card overflow-hidden" style={{ background: "var(--surface-1)" }}>
+      <div className="flex flex-wrap items-center gap-3 px-4 pt-3 pb-2 text-xs" style={{ color: "var(--text-muted)" }}>
+        <span>Min-pillar score:</span>
+        <span className="flex items-center gap-1">
+          <span className="inline-block w-3 h-3 rounded-sm" style={{ background: pctToColor(0) }} /> 0%
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="inline-block w-3 h-3 rounded-sm" style={{ background: pctToColor(50) }} /> 50%
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="inline-block w-3 h-3 rounded-sm" style={{ background: pctToColor(100) }} /> 100%
+        </span>
+        <span className="flex items-center gap-1 ml-2">
+          <span className="inline-block w-3 h-3 rounded-sm" style={{ background: pctToColor(null) }} /> excluded
+          from ranking (real scorecard exists, click for why)
+        </span>
+        <span className="flex items-center gap-1 ml-2">
+          <span className="inline-block w-3 h-3 rounded-sm" style={{ background: "#e1e0d9" }} /> not tracked
+        </span>
+      </div>
+
       <ComposableMap
         projection="geoEqualEarth"
         projectionConfig={{ scale: 145 }}
@@ -134,26 +154,6 @@ export default function WorldMap({
           }
         </Geographies>
       </ComposableMap>
-
-      <div className="flex flex-wrap items-center gap-3 px-4 pb-3 text-xs" style={{ color: "var(--text-muted)" }}>
-        <span>Min-pillar score:</span>
-        <span className="flex items-center gap-1">
-          <span className="inline-block w-3 h-3 rounded-sm" style={{ background: pctToColor(0) }} /> 0%
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="inline-block w-3 h-3 rounded-sm" style={{ background: pctToColor(50) }} /> 50%
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="inline-block w-3 h-3 rounded-sm" style={{ background: pctToColor(100) }} /> 100%
-        </span>
-        <span className="flex items-center gap-1 ml-2">
-          <span className="inline-block w-3 h-3 rounded-sm" style={{ background: pctToColor(null) }} /> excluded
-          from ranking (real scorecard exists, click for why)
-        </span>
-        <span className="flex items-center gap-1 ml-2">
-          <span className="inline-block w-3 h-3 rounded-sm" style={{ background: "#e1e0d9" }} /> not tracked
-        </span>
-      </div>
 
       {popup && (
         <div
