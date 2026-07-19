@@ -114,12 +114,14 @@ export async function fetchZoneRankingExcluded(): Promise<ZoneRankingExcludedRow
   return res.rows;
 }
 
-export async function fetchDistinctEvaluationZones(): Promise<string[]> {
+export type EvaluationZoneSummary = { zone_code: string; display_name: string };
+
+export async function fetchEvaluationZoneSummaries(): Promise<EvaluationZoneSummary[]> {
   const pool = getPool();
-  const res = await pool.query<{ zone_code: string }>(
-    `SELECT zone_code FROM zone_evaluation_summary ORDER BY 1`
+  const res = await pool.query<EvaluationZoneSummary>(
+    `SELECT zone_code, display_name FROM zone_evaluation_summary ORDER BY zone_code`
   );
-  return res.rows.map((r) => r.zone_code);
+  return res.rows;
 }
 
 export type ZoneEvaluationSummaryRow = {

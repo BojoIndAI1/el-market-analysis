@@ -1,4 +1,4 @@
-import type { ZoneRankingRow } from "@/lib/db";
+import type { ZoneRankingRow, EvaluationZoneSummary } from "@/lib/db";
 
 export type ContinentKey =
   | "Europe"
@@ -42,9 +42,10 @@ export type ZoneRecord = {
 export function buildZoneRegistry(
   forecastZoneCodes: string[],
   rankingRows: ZoneRankingRow[] = [],
-  evaluationZoneCodes: string[] = []
+  evaluationZones: EvaluationZoneSummary[] = []
 ): ZoneRecord[] {
   const byCode = new Map<string, ZoneRecord>();
+  const evaluationZoneCodes = evaluationZones.map((e) => e.zone_code);
 
   for (const r of rankingRows) {
     if (!r.zone_code) continue;
@@ -57,13 +58,13 @@ export function buildZoneRegistry(
     });
   }
 
-  for (const code of evaluationZoneCodes) {
-    if (!byCode.has(code)) {
-      byCode.set(code, {
-        zoneCode: code,
-        displayName: code,
-        continent: inferContinent(code),
-        hasForecastData: forecastZoneCodes.includes(code),
+  for (const { zone_code, display_name } of evaluationZones) {
+    if (!byCode.has(zone_code)) {
+      byCode.set(zone_code, {
+        zoneCode: zone_code,
+        displayName: display_name,
+        continent: inferContinent(display_name),
+        hasForecastData: forecastZoneCodes.includes(zone_code),
         hasEvaluation: true,
       });
     }

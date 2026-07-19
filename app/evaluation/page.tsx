@@ -1,4 +1,4 @@
-import { fetchDistinctForecastZones, fetchZoneRanking, fetchDistinctEvaluationZones } from "@/lib/db";
+import { fetchDistinctForecastZones, fetchZoneRanking, fetchEvaluationZoneSummaries } from "@/lib/db";
 import { buildZoneRegistry } from "@/lib/zones";
 import EvaluationClient from "@/components/EvaluationClient";
 
@@ -11,10 +11,12 @@ export default async function EvaluationPage({
   const [forecastZones, rankingRows, evaluationZones] = await Promise.all([
     fetchDistinctForecastZones(),
     fetchZoneRanking(),
-    fetchDistinctEvaluationZones(),
+    fetchEvaluationZoneSummaries(),
   ]);
+  // Same zone set as the Data page (hasForecastData) -- a zone without a written
+  // evaluation yet still shows up, with a placeholder, rather than disappearing.
   const registry = buildZoneRegistry(forecastZones, rankingRows, evaluationZones).filter(
-    (z) => z.hasEvaluation
+    (z) => z.hasForecastData
   );
 
   const requested = zonesParam
@@ -22,7 +24,8 @@ export default async function EvaluationPage({
     : zone
       ? [zone]
       : [];
-  const initialZones = requested.filter((z) => evaluationZones.includes(z));
+  const registryZoneCodes = registry.map((z) => z.zoneCode);
+  const initialZones = requested.filter((z) => registryZoneCodes.includes(z));
 
   return (
     <EvaluationClient

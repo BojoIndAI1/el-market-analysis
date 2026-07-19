@@ -92,6 +92,12 @@ export default function EvaluationClient({
     return filtered.map((z) => ({ zoneCode: z.zoneCode, displayName: z.displayName }));
   }, [zones, continent]);
 
+  const zoneByCode = useMemo(() => {
+    const map: Record<string, ZoneRecord> = {};
+    zones.forEach((z) => (map[z.zoneCode] = z));
+    return map;
+  }, [zones]);
+
   function handleContinentChange(next: "Total" | ContinentKey) {
     setContinent(next);
     const filtered = next === "Total" ? zones : zones.filter((z) => z.continent === next);
@@ -146,7 +152,19 @@ export default function EvaluationClient({
       <div className="flex flex-col gap-10">
         {selected.map((code) => {
           const ev = evaluations[code];
-          if (!ev) return null;
+          if (!ev) {
+            if (loading) return null;
+            return (
+              <div key={code}>
+                <h2 className="text-xl font-semibold mb-1">
+                  {zoneByCode[code]?.displayName ?? code}
+                </h2>
+                <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+                  No qualitative evaluation write-up yet for this zone.
+                </p>
+              </div>
+            );
+          }
           return (
             <div key={code}>
               <div className="flex flex-wrap items-baseline justify-between gap-2 mb-1">
