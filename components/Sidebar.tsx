@@ -45,9 +45,6 @@ export default function Sidebar() {
           );
         })}
       </nav>
-      <div className="mt-auto px-5 py-4 text-[11px]" style={{ color: "var(--text-muted)" }}>
-        Local build — not yet published
-      </div>
     </aside>
   );
 }
