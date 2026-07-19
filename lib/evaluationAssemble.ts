@@ -6,7 +6,7 @@ import type {
 
 export type SubCategory = {
   code: string;
-  label: string;
+  label: string | null;
   score: string | null;
   rationale: string | null;
 };
