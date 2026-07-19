@@ -59,13 +59,25 @@ export default function Sidebar() {
           );
         })}
       </nav>
-      <div className="mt-auto px-5 py-4 text-xs" style={{ color: "var(--text-muted)" }}>
+      <div
+        className="mt-auto px-3 py-4"
+        style={{ borderTop: "1px solid var(--border-hairline)" }}
+      >
         {email === undefined ? null : email ? (
-          <Link href="/account" className="hover:underline">
+          <Link
+            href="/account"
+            className="block px-3 py-2 rounded-lg text-sm font-medium truncate hover:underline"
+            style={{ color: "var(--text-secondary)" }}
+            title={email}
+          >
             {email}
           </Link>
         ) : (
-          <Link href="/login" className="hover:underline">
+          <Link
+            href="/login"
+            className="block text-center px-3 py-2 rounded-lg text-sm font-semibold text-white"
+            style={{ background: "var(--series-1)" }}
+          >
             Log in
           </Link>
         )}
