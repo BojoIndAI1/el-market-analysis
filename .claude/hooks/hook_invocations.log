@@ -1,0 +1,7 @@
+2026-07-20T16:59:57  MATCHED: vercel command about to run -- command: 'echo \'{"tool_name":"Bash","tool_input":{"command":"vercel --prod"}}\' | py -3 "/c/Users/Ventura AI/projects/MARITIME DATA CENTER/Market_Analysis_Pricing/dashboard/.claude/hooks/on_vercel_command.py"\necho "--- exit: $? ---"\necho \'{"tool_name":"Bash","tool_input":{"command":"git push origin main"}}\' | py -3 "/c/Users/Ventura AI/projects/MARITIME DATA CENTER/Market_Analysis_Pricing/dashboard/.claude/hooks/on_vercel_command.py"\necho "--- exit: $? (expect silent) ---"'
+2026-07-20T17:00:00  MATCHED: vercel command about to run -- command: 'vercel --prod'
+2026-07-20T17:00:06  MATCHED: vercel command about to run -- command: 'echo "safe no-op: verifying vercel-guard PreToolUse hook fires live (not actually running vercel)"'
+2026-07-20T21:26:12  MATCHED: linting lib\vessel.ts
+2026-07-20T21:26:33  MATCHED: linting lib\vessel.ts
+2026-07-20T21:27:11  MATCHED: linting lib\vessel.ts
+2026-07-20T21:27:23  MATCHED: linting lib\vessel.ts
