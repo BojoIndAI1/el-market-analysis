@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ComposableMap, Geographies, Geography } from "react-simple-maps";
 import worldTopology from "world-atlas/countries-110m.json";
 import { COUNTRY_ZONES } from "@/lib/countryZones";
@@ -30,9 +30,47 @@ export default function WorldMap({
   excluded: ZoneRankingExcludedRow[];
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
   const [popup, setPopup] = useState<Popup | null>(null);
   const [popupData, setPopupData] = useState<DataPageResponse | null>(null);
   const [loadingPopup, setLoadingPopup] = useState(false);
+  const [popupPos, setPopupPos] = useState({ left: 0, top: 0 });
+
+  // Reposition the popup after every render that could change its size (a new click, or the
+  // mini-chart finishing its fetch) so it never extends past the container's own edges -- the
+  // container clips with overflow-hidden, so an unclamped popup near the right/bottom edge (or
+  // above a tall chart) would otherwise get silently cut off instead of just misplaced.
+  useLayoutEffect(() => {
+    if (!popup) return;
+    const container = containerRef.current;
+    const popupEl = popupRef.current;
+    const margin = 8;
+
+    if (!container || !popupEl) {
+      setPopupPos({ left: popup.x, top: popup.y + 12 });
+      return;
+    }
+
+    const containerRect = container.getBoundingClientRect();
+    const popupWidth = popupEl.offsetWidth;
+    const popupHeight = popupEl.offsetHeight;
+
+    let left = popup.x;
+    if (left + popupWidth + margin > containerRect.width) {
+      left = containerRect.width - popupWidth - margin;
+    }
+    if (left < margin) left = margin;
+
+    let top = popup.y + 12;
+    if (top + popupHeight + margin > containerRect.height) {
+      // Prefer flipping above the click point; if that would also overflow the top, just
+      // clamp to the bottom of the container instead of letting it run off either edge.
+      const above = popup.y - popupHeight - 12;
+      top = above >= margin ? above : Math.max(margin, containerRect.height - popupHeight - margin);
+    }
+
+    setPopupPos({ left, top });
+  }, [popup, popupData, loadingPopup]);
 
   const rankedByZone = useMemo(() => {
     const map = new Map<string, ZoneRankingRow>();
@@ -157,10 +195,11 @@ export default function WorldMap({
 
       {popup && (
         <div
+          ref={popupRef}
           className="absolute z-20 w-80 rounded-lg border shadow-xl p-4"
           style={{
-            left: Math.min(popup.x, 800 - 320),
-            top: popup.y + 12,
+            left: popupPos.left,
+            top: popupPos.top,
             background: "var(--surface-1)",
             borderColor: "var(--border-hairline)",
           }}
