@@ -163,8 +163,8 @@ function DataPageInner() {
           </section>
 
           <section className="card p-5 mb-6">
-            <h2 className="text-base font-semibold mb-3">Generation mix, 2021 – 2031</h2>
-            <TechMixChart data={data.techMix} />
+            <h2 className="text-base font-semibold mb-3">Generation mix by technology</h2>
+            <TechMixChart data={data.techMix} buckets={data.techMixBuckets} />
           </section>
 
           <section className="card p-5">

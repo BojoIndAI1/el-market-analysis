@@ -1,5 +1,12 @@
-import { fetchZoneAnnual, fetchZoneForecast, ZoneAnnualRow, ForecastRow } from "@/lib/db";
+import {
+  fetchZoneAnnual,
+  fetchZoneForecast,
+  fetchZoneGenerationByTechnology,
+  ZoneAnnualRow,
+  ForecastRow,
+} from "@/lib/db";
 import { twhToVesselEquivalents } from "@/lib/vessel";
+import { TECH_BUCKETS, TECH_BUCKET_ORDER } from "@/lib/techBuckets";
 
 function sum(values: (number | null)[]): number | null {
   const present = values.filter((v): v is number => v !== null && v !== undefined);
@@ -22,9 +29,7 @@ export type ForecastYearPoint = {
 
 export type TechMixPoint = {
   year: number;
-  windSolarTwh: number | null;
-  otherTwh: number | null;
-  otherHeldFlat: boolean;
+  values: Record<string, number>;
 };
 
 export type BridgeStep = {
@@ -68,6 +73,7 @@ export type DataPageResponse = {
   zonesMissing: string[];
   forecast: ForecastYearPoint[];
   techMix: TechMixPoint[];
+  techMixBuckets: string[];
   bridgeSurplus: BridgeStep[];
   bridgeGeneration: BridgeStep[];
   historicalValidation: HistoricalValidationPoint[];
@@ -124,12 +130,6 @@ export async function buildDataPageResponse(
 
   const forecastByYear = new Map(forecast.map((f) => [f.year, f]));
 
-  // --- Tech mix: Wind+Solar (dispatched, post-curtailment) vs. Other (everything
-  // else). Wind+Solar = generation capacity - oversupply, available for every
-  // forecast-table year. "Other" only has a real historical figure where
-  // zone_annual_reconciliation has total_generation_twh; forecast years hold
-  // the last known aggregate "Other" flat since non-renewable generation isn't
-  // modeled in the bottom-up forecast.
   const byYearAnnual = new Map<number, ZoneAnnualRow[]>();
   annualRows.forEach((row) => {
     const arr = byYearAnnual.get(row.year) ?? [];
@@ -137,38 +137,28 @@ export async function buildDataPageResponse(
     byYearAnnual.set(row.year, arr);
   });
 
-  let lastKnownOther: number | null = null;
-  let lastKnownOtherYear = -Infinity;
-  const otherByYear = new Map<number, number | null>();
-  Array.from(byYearAnnual.keys())
-    .sort((a, b) => a - b)
-    .forEach((year) => {
-      const rows = byYearAnnual.get(year)!;
-      const totalGen = sum(rows.map((r) => r.total_generation_twh));
-      const windSolar = sum(rows.map((r) => r.windsolar_actual_twh));
-      const other = totalGen !== null && windSolar !== null ? totalGen - windSolar : null;
-      otherByYear.set(year, other);
-      if (other !== null && year >= lastKnownOtherYear) {
-        lastKnownOther = other;
-        lastKnownOtherYear = year;
-      }
-    });
-
-  const techMix: TechMixPoint[] = years.map((year) => {
-    const fPoint = forecastByYear.get(year);
-    const windSolarTwh =
-      fPoint && fPoint.generationCapacityTwh !== null && fPoint.oversupplyTwh !== null
-        ? fPoint.generationCapacityTwh - fPoint.oversupplyTwh
-        : null;
-    const directOther = otherByYear.get(year);
-    const usingHeldFlat = directOther === undefined || directOther === null;
-    return {
-      year,
-      windSolarTwh,
-      otherTwh: usingHeldFlat ? lastKnownOther : directOther,
-      otherHeldFlat: usingHeldFlat && lastKnownOther !== null,
-    };
+  // --- Tech mix: real per-technology generation (zone_generation_by_technology),
+  // bucketed into a canonical set (see TECH_BUCKETS above) rather than a synthetic
+  // Wind+Solar-vs-Other proxy. Only zones/years with real rows show up here -- no
+  // held-flat or back-derived figures.
+  const techByYearBucket = new Map<number, Map<string, number>>();
+  const bucketsPresent = new Set<string>();
+  const techRows = await fetchZoneGenerationByTechnology(zonesResolved);
+  techRows.forEach((row) => {
+    if (row.actual_generation_twh === null) return;
+    const bucket = TECH_BUCKETS[row.technology] ?? "Other / conventional";
+    bucketsPresent.add(bucket);
+    const yearMap = techByYearBucket.get(row.year) ?? new Map<string, number>();
+    yearMap.set(bucket, (yearMap.get(bucket) ?? 0) + row.actual_generation_twh);
+    techByYearBucket.set(row.year, yearMap);
   });
+
+  const techMixBuckets = TECH_BUCKET_ORDER.filter((b) => bucketsPresent.has(b));
+  const techMixYears = Array.from(techByYearBucket.keys()).sort((a, b) => a - b);
+  const techMix: TechMixPoint[] = techMixYears.map((year) => ({
+    year,
+    values: Object.fromEntries(techByYearBucket.get(year)!),
+  }));
 
   // --- Waterfall bridges, 2025 -> 2031 ---
   const start = forecastByYear.get(BRIDGE_START_YEAR);
@@ -308,6 +298,7 @@ export async function buildDataPageResponse(
     zonesMissing,
     forecast,
     techMix,
+    techMixBuckets,
     bridgeSurplus,
     bridgeGeneration,
     historicalValidation,

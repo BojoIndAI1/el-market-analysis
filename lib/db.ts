@@ -45,6 +45,28 @@ export async function fetchZoneAnnual(zoneCodes: string[]): Promise<ZoneAnnualRo
   return res.rows;
 }
 
+export type GenerationByTechnologyRow = {
+  zone_code: string;
+  year: number;
+  technology: string;
+  actual_generation_twh: number | null;
+};
+
+export async function fetchZoneGenerationByTechnology(
+  zoneCodes: string[]
+): Promise<GenerationByTechnologyRow[]> {
+  if (zoneCodes.length === 0) return [];
+  const pool = getPool();
+  const res = await pool.query<GenerationByTechnologyRow>(
+    `SELECT zone_code, year, technology, actual_generation_twh
+       FROM zone_generation_by_technology
+      WHERE zone_code = ANY($1)
+      ORDER BY zone_code, year`,
+    [zoneCodes]
+  );
+  return res.rows;
+}
+
 export type ForecastRow = {
   zone_code: string;
   year: number;
