@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import dynamic from "next/dynamic";
 import type { ForecastYearPoint, TechMixPoint } from "@/lib/aggregate";
 import type {
   ZoneForecastAssumptions,
@@ -10,7 +11,17 @@ import type {
 } from "@/lib/db";
 import SurplusMiniChart from "@/components/SurplusMiniChart";
 import TechMixChart from "@/components/TechMixChart";
-import CountryZoomMap from "@/components/CountryZoomMap";
+
+// d3-geo's fitExtent (used for the precise country crop) runs trig internally
+// (atan2/sin/cos for the equal-earth projection) that can produce last-bit-different
+// floating point results between Node's server-render and the browser -- a documented
+// SSR hazard for react-simple-maps. Rendering client-only (ssr: false) avoids ever having
+// a server-computed version to mismatch against, instead of just tolerating the resulting
+// hydration-mismatch warning + extra re-render on every page load.
+const CountryZoomMap = dynamic(() => import("@/components/CountryZoomMap"), {
+  ssr: false,
+  loading: () => <div style={{ width: 192, height: 160 }} />,
+});
 
 export type ZoneProfile = {
   zoneCode: string;
@@ -60,8 +71,8 @@ export default function ZoneProfileCard({
     <div className="card p-5 flex flex-col gap-5">
       <div className="flex items-start justify-between gap-4">
         <h2 className="text-lg font-semibold">{displayName}</h2>
-        <div className="w-48 shrink-0">
-          <CountryZoomMap zoneCode={profile.zoneCode} />
+        <div className="shrink-0">
+          <CountryZoomMap zoneCode={profile.zoneCode} generationProjects={profile.generationProjects} />
         </div>
       </div>
 
