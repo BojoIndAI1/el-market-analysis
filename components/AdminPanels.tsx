@@ -72,10 +72,16 @@ export function PageAccessToggles({ initial }: { initial: PageAccessRow[] }) {
   async function setMinRole(pageKey: string, next: PageMinRole) {
     setBusyKey(pageKey);
     const supabase = createClient();
+    const label = rows.find((r) => r.page_key === pageKey)?.label ?? pageKey;
+    // Upsert, not update -- a page just added to PAGE_ACCESS_KEYS (lib/pageAccess.ts) has no
+    // page_access row yet, so a plain .update() would silently affect zero rows the first time
+    // an admin tries to configure it.
     const { error } = await supabase
       .from("page_access")
-      .update({ min_role: next, updated_at: new Date().toISOString() })
-      .eq("page_key", pageKey);
+      .upsert(
+        { page_key: pageKey, label, min_role: next, updated_at: new Date().toISOString() },
+        { onConflict: "page_key" }
+      );
     setBusyKey(null);
     if (!error) {
       setRows((rs) => rs.map((r) => (r.page_key === pageKey ? { ...r, min_role: next } : r)));

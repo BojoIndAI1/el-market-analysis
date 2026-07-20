@@ -16,7 +16,11 @@ export async function proxy(request: NextRequest) {
       .select("min_role")
       .eq("page_key", pageKey)
       .maybeSingle();
-    const minRole = (data?.min_role as PageMinRole | undefined) ?? "public";
+    // Fail closed: a page listed in PAGE_ACCESS_KEYS but missing its page_access row (e.g. just
+    // added to the codebase, not yet configured in /admin) requires login by default, matching
+    // this project's standing rule that everything except the landing page is gated. "public"
+    // must be an explicit, deliberate DB value, never an absence-of-data default.
+    const minRole = (data?.min_role as PageMinRole | undefined) ?? "user";
 
     if (minRole !== "public") {
       if (!user) {
