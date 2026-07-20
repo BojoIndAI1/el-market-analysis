@@ -7,7 +7,7 @@ export default async function RankingPage() {
 
   return (
     <div className="max-w-5xl">
-      <h1 className="text-2xl font-semibold mb-1">Ranking</h1>
+      <h1 className="text-2xl font-semibold mb-1">Overview</h1>
       <p className="text-sm mb-6" style={{ color: "var(--text-secondary)" }}>
         Candidates ranked by min-pillar score — the weakest of the four pillars (Opportunity size,
         Economics, Feasibility &amp; legality, Durability &amp; trend), deliberately not the mean, so

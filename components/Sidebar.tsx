@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
 const NAV_ITEMS = [
-  { href: "/ranking", label: "Ranking" },
+  { href: "/ranking", label: "Overview" },
   { href: "/data", label: "Data" },
   { href: "/evaluation", label: "Evaluation" },
   { href: "/generator-economics", label: "Generator Economics" },
