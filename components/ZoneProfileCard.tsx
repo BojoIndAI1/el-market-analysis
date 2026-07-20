@@ -20,7 +20,7 @@ import TechMixChart from "@/components/TechMixChart";
 // hydration-mismatch warning + extra re-render on every page load.
 const CountryZoomMap = dynamic(() => import("@/components/CountryZoomMap"), {
   ssr: false,
-  loading: () => <div style={{ width: 192, height: 160 }} />,
+  loading: () => <div style={{ width: 520, height: 433 }} />,
 });
 
 export type ZoneProfile = {
@@ -69,11 +69,10 @@ export default function ZoneProfileCard({
 
   return (
     <div className="card p-5 flex flex-col gap-5">
-      <div className="flex items-start justify-between gap-4">
-        <h2 className="text-lg font-semibold">{displayName}</h2>
-        <div className="shrink-0">
-          <CountryZoomMap zoneCode={profile.zoneCode} generationProjects={profile.generationProjects} />
-        </div>
+      <h2 className="text-lg font-semibold">{displayName}</h2>
+
+      <div className="flex justify-center">
+        <CountryZoomMap zoneCode={profile.zoneCode} generationProjects={profile.generationProjects} />
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

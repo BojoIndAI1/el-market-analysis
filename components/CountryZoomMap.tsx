@@ -4,16 +4,23 @@ import { useMemo, useState } from "react";
 import { ComposableMap, Marker } from "react-simple-maps";
 import type { ProjectionFunction } from "react-simple-maps";
 import { geoEqualEarth, geoPath, type GeoProjection } from "d3-geo";
+import { forceSimulation, forceCollide, forceX, forceY } from "d3-force";
 import { feature } from "topojson-client";
 import worldTopology from "world-atlas/countries-110m.json";
 import { countryForZone } from "@/lib/countryZones";
 import type { GenerationProjectRow } from "@/lib/db";
 
-const WIDTH = 384;
-const HEIGHT = 320;
-const PADDING = 10;
-const MIN_R = 4;
-const MAX_R = 20;
+const DISPLAY_WIDTH = 520;
+const DISPLAY_HEIGHT = 433;
+const WIDTH = DISPLAY_WIDTH * 2;
+const HEIGHT = DISPLAY_HEIGHT * 2;
+const PADDING = 28;
+const MIN_R = 7;
+// Effective max bubble radius scales DOWN as project count goes up, referenced against
+// 8 projects feeling comfortable at MAX_R -- gives the collision-declutter step below
+// more room to work with on dense zones (DE_LU's 25) instead of fighting oversized
+// circles, without shrinking every zone uniformly regardless of how crowded it is.
+const MAX_R = 34;
 
 type WorldFeature = { properties?: { name?: string }; geometry: { type: string; coordinates: unknown } };
 type Ring = [number, number][];
@@ -61,8 +68,9 @@ function pointInAnyRing(pt: [number, number], rings: Ring[]): boolean {
 }
 
 // Deterministic per-project pseudo-random position (mulberry32 seeded by a string hash
-// of the project name) -- the same project always lands in the same spot on every
-// render/reload rather than jittering, without needing to persist a layout anywhere.
+// of the project name) -- the same project always lands in the same starting spot on
+// every render/reload rather than jittering. The collision-declutter step afterward
+// nudges it away from overlapping neighbors, but always relative to this same seed.
 function hashString(s: string): number {
   let h = 1779033703 ^ s.length;
   for (let i = 0; i < s.length; i++) {
@@ -92,6 +100,34 @@ function scatterPoint(seedStr: string, rings: Ring[], bbox: [number, number, num
   // Rejection sampling failed 40 times in a row (a very thin/irregular shape) -- fall
   // back to the bbox center rather than an obviously-wrong corner.
   return [(x0 + x1) / 2, (y0 + y1) / 2];
+}
+
+type BubbleSeed = { id: string; x: number; y: number; r: number };
+
+// Spreads overlapping bubbles apart (d3-force's collision detection) while a weak pull
+// back toward each bubble's own seeded scatter point keeps it from drifting far from
+// where it started -- so crowded zones (DE_LU's 25 projects) declutter without losing
+// the "spread across the country" character a pure collision-only pass would erase.
+function declutter(seeds: BubbleSeed[], bbox: [number, number, number, number]): Map<string, [number, number]> {
+  if (seeds.length === 0) return new Map();
+  type Node = BubbleSeed & { ox: number; oy: number; vx?: number; vy?: number };
+  const nodes: Node[] = seeds.map((s) => ({ ...s, ox: s.x, oy: s.y }));
+
+  const sim = forceSimulation(nodes)
+    .force("collide", forceCollide<Node>((d) => d.r + 2).strength(0.9))
+    .force("x", forceX<Node>((d) => d.ox).strength(0.12))
+    .force("y", forceY<Node>((d) => d.oy).strength(0.12))
+    .stop();
+  for (let i = 0; i < 250; i++) sim.tick();
+
+  const [x0, y0, x1, y1] = bbox;
+  const result = new Map<string, [number, number]>();
+  for (const n of nodes) {
+    const x = Math.min(Math.max(n.x, x0 + n.r), x1 - n.r);
+    const y = Math.min(Math.max(n.y, y0 + n.r), y1 - n.r);
+    result.set(n.id, [x, y]);
+  }
+  return result;
 }
 
 export default function CountryZoomMap({
@@ -126,10 +162,11 @@ export default function CountryZoomMap({
     return geoPath(projection)(targetFeature as any) ?? undefined;
   }, [targetFeature, projection]);
 
-  // One bubble per project, placed by rejection-sampling a point inside the country's
-  // own (projected) silhouette -- NOT each project's real site. generation_projects has
-  // no lat/lon columns yet; scattering within the true shape is an honest "somewhere in
-  // this zone" indicator, not a claim of precise siting (see the caption below the map).
+  // One bubble per project. Seeded by rejection-sampling a point inside the country's
+  // own (projected) silhouette, then decluttered against every other project's bubble
+  // so they don't overlap -- NOT each project's real site. generation_projects has no
+  // lat/lon columns yet; this is an honest "somewhere in this zone" indicator (see the
+  // caption below the map), not a claim of precise siting.
   const bubbles = useMemo(() => {
     if (!targetFeature || !projection) return [];
     const rings = projectRings(targetFeature.geometry, projection);
@@ -145,20 +182,26 @@ export default function CountryZoomMap({
     // projects (additions and retirements together) so the two are visually comparable.
     const magnitudes = generationProjects.map((p) => p.capacity_mw).filter((c): c is number => c !== null && c !== 0).map(Math.abs);
     const maxMagnitude = magnitudes.length > 0 ? Math.max(...magnitudes) : null;
+    // Denser zones get a smaller effective max radius so the declutter step below has
+    // room to work with, rather than fighting oversized circles on a 25-project zone.
+    const effectiveMaxR = Math.max(MIN_R + 4, Math.min(MAX_R, MAX_R * Math.sqrt(8 / Math.max(generationProjects.length, 1))));
 
-    return generationProjects.map((p) => {
-      const [px, py] = scatterPoint(p.project_name, rings, bbox);
+    const seeds: (BubbleSeed & { project: GenerationProjectRow; isRetirement: boolean })[] = generationProjects.map((p) => {
+      const [x, y] = scatterPoint(p.project_name, rings, bbox);
       const magnitude = p.capacity_mw !== null ? Math.abs(p.capacity_mw) : null;
-      const radius =
-        magnitude && maxMagnitude
-          ? MIN_R + (MAX_R - MIN_R) * Math.sqrt(magnitude / maxMagnitude)
-          : MIN_R;
-      const isRetirement = p.capacity_mw !== null && p.capacity_mw < 0;
+      const r = magnitude && maxMagnitude ? MIN_R + (effectiveMaxR - MIN_R) * Math.sqrt(magnitude / maxMagnitude) : MIN_R;
+      return { id: p.project_name, x, y, r, project: p, isRetirement: p.capacity_mw !== null && p.capacity_mw < 0 };
+    });
+
+    const declutteredPositions = declutter(seeds, bbox);
+
+    return seeds.map((s) => {
+      const [px, py] = declutteredPositions.get(s.id) ?? [s.x, s.y];
       // Marker coordinates are lon/lat, not pixels -- invert the projection to get back
       // to geographic space so <Marker> (which projects internally) lands on our chosen
       // pixel point.
       const inverted = projection.invert ? projection.invert([px, py]) : null;
-      return { project: p, coordinates: inverted as [number, number] | null, radius, isRetirement };
+      return { project: s.project, coordinates: inverted as [number, number] | null, radius: s.r, isRetirement: s.isRetirement };
     }).filter((b) => b.coordinates !== null);
   }, [targetFeature, projection, generationProjects]);
 
@@ -173,8 +216,8 @@ export default function CountryZoomMap({
   const active = bubbles.find((b) => b.project.project_name === openProject);
 
   return (
-    <div className="relative" style={{ width: WIDTH / 2, height: HEIGHT / 2 }}>
-      <div className="rounded-md overflow-hidden" style={{ background: "var(--surface-2)", height: HEIGHT / 2 }}>
+    <div className="relative" style={{ width: DISPLAY_WIDTH, height: DISPLAY_HEIGHT }}>
+      <div className="rounded-md overflow-hidden" style={{ background: "var(--surface-2)", height: DISPLAY_HEIGHT }}>
         <ComposableMap
           // @types/react-simple-maps types `projection` as a (width,height,config) =>
           // GeoProjection builder, but the real runtime code (react-simple-maps'
@@ -190,15 +233,15 @@ export default function CountryZoomMap({
           height={HEIGHT}
           style={{ width: "100%", height: "100%" }}
         >
-          <path d={countryPath} fill="var(--series-1)" stroke="var(--page-plane)" strokeWidth={0.75} style={{ outline: "none" }} />
+          <path d={countryPath} fill="var(--series-1)" stroke="var(--page-plane)" strokeWidth={1} style={{ outline: "none" }} />
           {bubbles.map(({ project, coordinates, radius, isRetirement }) => (
             <Marker key={project.project_name} coordinates={coordinates!}>
               <circle
                 r={radius}
                 fill={isRetirement ? "var(--status-critical)" : "var(--status-warning)"}
-                fillOpacity={0.75}
+                fillOpacity={openProject === project.project_name ? 0.95 : 0.75}
                 stroke="var(--surface-1)"
-                strokeWidth={1}
+                strokeWidth={1.5}
                 style={{ cursor: "pointer" }}
                 onClick={() => setOpenProject((v) => (v === project.project_name ? null : project.project_name))}
               />
@@ -209,7 +252,7 @@ export default function CountryZoomMap({
 
       {active && (
         <div
-          className="absolute z-20 top-full right-0 mt-2 w-64 rounded-lg border shadow-xl p-3"
+          className="absolute z-20 top-full right-0 mt-2 w-72 rounded-lg border shadow-xl p-3"
           style={{ background: "var(--surface-1)", borderColor: "var(--border-hairline)" }}
         >
           <div className="flex items-start justify-between mb-1">
