@@ -9,6 +9,7 @@ const NAV_ITEMS = [
   { href: "/ranking", label: "Overview" },
   { href: "/scorecard", label: "Scorecard" },
   { href: "/data", label: "Data" },
+  { href: "/zone-profile", label: "Zone Profile" },
   { href: "/evaluation", label: "Evaluation" },
   { href: "/generator-economics", label: "Generator Economics" },
   { href: "/methodology", label: "Methodology" },

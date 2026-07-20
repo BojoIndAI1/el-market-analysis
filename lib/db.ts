@@ -12,6 +12,115 @@ export function getPool(): Pool {
   return pool;
 }
 
+export type ZoneForecastAssumptions = {
+  zone_code: string;
+  year: number;
+  generation_capacity_note: string | null;
+  imports_note: string | null;
+  demand_note: string | null;
+  exports_note: string | null;
+  oversupply_note: string | null;
+  self_generation_note: string | null;
+  confidence: string | null;
+  source: string | null;
+};
+
+// The latest year present per zone (usually 2031) -- the "current" set of stated assumptions
+// behind the forecast, not a historical record of how they changed over time.
+export async function fetchZoneForecastAssumptions(
+  zoneCodes: string[]
+): Promise<ZoneForecastAssumptions[]> {
+  if (zoneCodes.length === 0) return [];
+  const pool = getPool();
+  const res = await pool.query<ZoneForecastAssumptions>(
+    `SELECT DISTINCT ON (zone_code) zone_code, year, generation_capacity_note, imports_note,
+            demand_note, exports_note, oversupply_note, self_generation_note, confidence, source
+       FROM zone_bottom_up_forecast
+      WHERE zone_code = ANY($1)
+      ORDER BY zone_code, year DESC`,
+    [zoneCodes]
+  );
+  return res.rows;
+}
+
+export type GenerationProjectRow = {
+  zone_code: string;
+  project_name: string;
+  capacity_mw: number | null;
+  technology: string | null;
+  commissioning_year: number | null;
+  confidence: string | null;
+  note: string | null;
+};
+
+export async function fetchGenerationProjects(zoneCodes: string[]): Promise<GenerationProjectRow[]> {
+  if (zoneCodes.length === 0) return [];
+  const pool = getPool();
+  const res = await pool.query<GenerationProjectRow>(
+    `SELECT zone_code, project_name, capacity_mw, technology, commissioning_year, confidence, note
+       FROM generation_projects
+      WHERE zone_code = ANY($1)
+      ORDER BY commissioning_year NULLS LAST, project_name`,
+    [zoneCodes]
+  );
+  return res.rows;
+}
+
+export type DemandOffsetProjectRow = {
+  zone_code: string;
+  project_name: string;
+  capacity_mw: number | null;
+  load_type: string | null;
+  commissioning_year: number | null;
+  prob_low: number | null;
+  prob_mid: number | null;
+  prob_high: number | null;
+  note: string | null;
+};
+
+export async function fetchDemandOffsetProjects(
+  zoneCodes: string[]
+): Promise<DemandOffsetProjectRow[]> {
+  if (zoneCodes.length === 0) return [];
+  const pool = getPool();
+  const res = await pool.query<DemandOffsetProjectRow>(
+    `SELECT zone_code, project_name, capacity_mw, load_type, commissioning_year,
+            prob_low, prob_mid, prob_high, note
+       FROM demand_offset_projects
+      WHERE zone_code = ANY($1)
+      ORDER BY commissioning_year NULLS LAST, project_name`,
+    [zoneCodes]
+  );
+  return res.rows;
+}
+
+export type GridProjectRow = {
+  country: string;
+  region: string | null;
+  project_name: string;
+  tso: string | null;
+  added_capacity_mw: number | null;
+  commissioning_year: number | null;
+  status: string | null;
+  confidence: string | null;
+  notes: string | null;
+};
+
+// grid_projects has no zone_code column -- it's keyed by a free-text `country` (a real,
+// pre-existing inconsistency: sometimes an ISO-ish code like "DE", sometimes a full name like
+// "Germany") plus a free-text `region`. Fetched unfiltered; matched to zone_code(s) in
+// lib/gridProjectZones.ts, which is the only place that inconsistency needs handling.
+export async function fetchGridProjects(): Promise<GridProjectRow[]> {
+  const pool = getPool();
+  const res = await pool.query<GridProjectRow>(
+    `SELECT country, region, project_name, tso, added_capacity_mw, commissioning_year,
+            status, confidence, notes
+       FROM grid_projects
+      ORDER BY commissioning_year NULLS LAST, project_name`
+  );
+  return res.rows;
+}
+
 export type ZoneAnnualRow = {
   zone_code: string;
   year: number;

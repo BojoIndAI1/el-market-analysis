@@ -2,6 +2,7 @@ export const PAGE_ACCESS_KEYS = [
   { key: "ranking", label: "Overview" },
   { key: "scorecard", label: "Scorecard" },
   { key: "data", label: "Data" },
+  { key: "zone-profile", label: "Zone Profile" },
   { key: "evaluation", label: "Evaluation" },
   { key: "generator-economics", label: "Generator Economics" },
   { key: "methodology", label: "Methodology" },
