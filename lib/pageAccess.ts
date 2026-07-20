@@ -1,5 +1,6 @@
 export const PAGE_ACCESS_KEYS = [
   { key: "ranking", label: "Overview" },
+  { key: "scorecard", label: "Scorecard" },
   { key: "data", label: "Data" },
   { key: "evaluation", label: "Evaluation" },
   { key: "generator-economics", label: "Generator Economics" },

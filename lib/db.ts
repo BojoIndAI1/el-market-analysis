@@ -123,6 +123,68 @@ export async function fetchZoneRanking(): Promise<ZoneRankingRow[]> {
   return res.rows;
 }
 
+export type ZoneScorecardRow = {
+  zone_code: string;
+  display_name: string;
+  min_pillar_pct: number | null;
+  binding_pillar: string | null;
+  mean_pct: number | null;
+  confidence: string | null;
+  pillar_a_pct: number | null;
+  pillar_b_pct: number | null;
+  pillar_c_pct: number | null;
+  pillar_d_pct: number | null;
+  oversupply_2031_twh: number | null;
+};
+
+// Every onboarded zone with a real scorecard (zone_evaluation_summary, 39 zones -- includes
+// Colombia/Paraguay, which have full pillar breakdowns despite being excluded from the
+// headline zone_ranking table for a separate Mechanism-6/7 methodology reason), joined against
+// its own Pillar A-D percentages and its 2031 bottom-up-forecast oversupply figure. Not every
+// zone has all four pillars scored (Egypt/Tunisia/Paraguay/Czechia never got a Pillar B row at
+// all -- a real, stated research gap, not a missing join) or a 2031 forecast (Colombia/Paraguay
+// have no bottom-up forecast model) -- both come back null rather than 0/fabricated.
+export async function fetchZoneScorecard(): Promise<ZoneScorecardRow[]> {
+  const pool = getPool();
+  const [summaries, pillars, forecast2031] = await Promise.all([
+    pool.query<{
+      zone_code: string;
+      display_name: string;
+      min_pillar_pct: number | null;
+      binding_pillar: string | null;
+      mean_pct: number | null;
+      confidence: string | null;
+    }>(`SELECT zone_code, display_name, min_pillar_pct, binding_pillar, mean_pct, confidence
+          FROM zone_evaluation_summary`),
+    pool.query<{ zone_code: string; pillar_code: string; pct: number | null }>(
+      `SELECT zone_code, pillar_code, pct FROM zone_evaluation_pillar`
+    ),
+    pool.query<{ zone_code: string; oversupply_twh: number | null }>(
+      `SELECT zone_code, oversupply_twh FROM zone_bottom_up_forecast WHERE year = 2031`
+    ),
+  ]);
+
+  const pillarByZone = new Map<string, Record<string, number | null>>();
+  pillars.rows.forEach((r) => {
+    const m = pillarByZone.get(r.zone_code) ?? {};
+    m[r.pillar_code] = r.pct;
+    pillarByZone.set(r.zone_code, m);
+  });
+  const oversupplyByZone = new Map(forecast2031.rows.map((r) => [r.zone_code, r.oversupply_twh]));
+
+  return summaries.rows.map((s) => {
+    const p = pillarByZone.get(s.zone_code) ?? {};
+    return {
+      ...s,
+      pillar_a_pct: p["A"] ?? null,
+      pillar_b_pct: p["B"] ?? null,
+      pillar_c_pct: p["C"] ?? null,
+      pillar_d_pct: p["D"] ?? null,
+      oversupply_2031_twh: oversupplyByZone.get(s.zone_code) ?? null,
+    };
+  });
+}
+
 export type ZoneRankingExcludedRow = {
   display_name: string;
   reason: string;

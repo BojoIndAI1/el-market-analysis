@@ -7,6 +7,7 @@ import { createClient } from "@/lib/supabase/client";
 
 const NAV_ITEMS = [
   { href: "/ranking", label: "Overview" },
+  { href: "/scorecard", label: "Scorecard" },
   { href: "/data", label: "Data" },
   { href: "/evaluation", label: "Evaluation" },
   { href: "/generator-economics", label: "Generator Economics" },
