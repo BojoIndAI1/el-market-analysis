@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ComposableMap, Marker } from "react-simple-maps";
 import type { ProjectionFunction } from "react-simple-maps";
 import { geoEqualEarth, geoPath, type GeoProjection } from "d3-geo";
@@ -21,6 +21,10 @@ const MIN_R = 7;
 // more room to work with on dense zones (DE_LU's 25) instead of fighting oversized
 // circles, without shrinking every zone uniformly regardless of how crowded it is.
 const MAX_R = 34;
+// How far outside the coastline an offshore project's bubble is placed (internal
+// 1040x866 pixel space) -- far enough to read clearly as "in the water", not so far it
+// drifts toward open ocean or off the visible canvas.
+const COASTAL_OFFSET = 26;
 
 type WorldFeature = { properties?: { name?: string }; geometry: { type: string; coordinates: unknown } };
 type Ring = [number, number][];
@@ -102,29 +106,103 @@ function scatterPoint(seedStr: string, rings: Ring[], bbox: [number, number, num
   return [(x0 + x1) / 2, (y0 + y1) / 2];
 }
 
-type BubbleSeed = { id: string; x: number; y: number; r: number };
+// For an offshore project: pick a real coastline vertex (from the country's own
+// projected ring data used to draw it, not a separate coastline dataset) and offset it
+// outward, away from that ring's own centroid, so the point lands in the water just off
+// the coast rather than anywhere inside the land polygon. This doesn't know which
+// specific sea/named site a project is at -- generation_projects has no lat/lon columns
+// -- but it's a real, geometry-driven fix for "offshore project bubble shown inland",
+// not a fabricated precise coordinate.
+//
+// "Vertex minus the ring's own centroid" is only an approximation of the true local
+// outward normal -- it can point the WRONG way at a concave stretch of coastline (a bay
+// or inlet), landing the "outward" offset back on land or on the far shore instead of at
+// sea. Verified this really happens, not just in theory: on DE_LU's real 25-project
+// stress test, one project's naive first-guess vertex landed inside land. Fixed the same
+// way scatterPoint already handles its own uncertainty -- try several different
+// coastline vertices and keep the first one whose offset point actually tests as
+// outside the land polygon, rather than trusting the first guess.
+function coastalPoint(seedStr: string, rings: Ring[], offset: number): [number, number] {
+  const rand = mulberry32(hashString(seedStr + ":coast"));
+  const nonEmptyRings = rings.filter((r) => r.length >= 3);
+  if (nonEmptyRings.length === 0) return [0, 0];
+  const totalVerts = nonEmptyRings.reduce((sum, r) => sum + r.length, 0);
 
-// Spreads overlapping bubbles apart (d3-force's collision detection) while a weak pull
-// back toward each bubble's own seeded scatter point keeps it from drifting far from
-// where it started -- so crowded zones (DE_LU's 25 projects) declutter without losing
-// the "spread across the country" character a pure collision-only pass would erase.
-function declutter(seeds: BubbleSeed[], bbox: [number, number, number, number]): Map<string, [number, number]> {
+  const vertexAt = (globalIndex: number): { vertex: [number, number]; ring: Ring } => {
+    let idx = globalIndex % totalVerts;
+    let ring = nonEmptyRings[0];
+    for (const r of nonEmptyRings) {
+      if (idx < r.length) {
+        ring = r;
+        break;
+      }
+      idx -= r.length;
+    }
+    return { vertex: ring[idx] ?? ring[0], ring };
+  };
+
+  let fallback: [number, number] | null = null;
+  const attempts = Math.min(60, totalVerts);
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const { vertex, ring } = vertexAt(Math.floor(rand() * totalVerts));
+    const centroid = ring.reduce((acc, p) => [acc[0] + p[0], acc[1] + p[1]], [0, 0]).map((v) => v / ring.length);
+    const dx = vertex[0] - centroid[0];
+    const dy = vertex[1] - centroid[1];
+    const len = Math.hypot(dx, dy) || 1;
+    const candidate: [number, number] = [vertex[0] + (dx / len) * offset, vertex[1] + (dy / len) * offset];
+    if (!fallback) fallback = candidate;
+    if (!pointInAnyRing(candidate, rings)) return candidate;
+  }
+  // Every attempt landed on land (a very unusual coastline shape) -- the first guess is
+  // no worse than any other at that point.
+  return fallback ?? [0, 0];
+}
+
+type BubbleSeed = {
+  id: string;
+  x: number;
+  y: number;
+  r: number;
+  isOffshore: boolean;
+  isGeocoded: boolean;
+  anchorStrength: number;
+};
+
+// Spreads overlapping bubbles apart (d3-force's collision detection) while a pull back
+// toward each bubble's own seeded position keeps it from drifting far from where it
+// started -- so crowded zones (DE_LU's 25 projects) declutter without losing the
+// "spread across the country/coast" character a pure collision-only pass would erase.
+// Offshore bubbles get a stronger pull-back (anchorStrength) so collision jostling
+// doesn't nudge them back onto land; clampBox is wider than the land bbox alone so
+// those same offshore bubbles aren't clamped back onto the coast they were just placed
+// outside of.
+function declutter(
+  seeds: BubbleSeed[],
+  clampBox: [number, number, number, number],
+  isInsideLand: (pt: [number, number]) => boolean
+): Map<string, [number, number]> {
   if (seeds.length === 0) return new Map();
   type Node = BubbleSeed & { ox: number; oy: number; vx?: number; vy?: number };
   const nodes: Node[] = seeds.map((s) => ({ ...s, ox: s.x, oy: s.y }));
 
   const sim = forceSimulation(nodes)
     .force("collide", forceCollide<Node>((d) => d.r + 2).strength(0.9))
-    .force("x", forceX<Node>((d) => d.ox).strength(0.12))
-    .force("y", forceY<Node>((d) => d.oy).strength(0.12))
+    .force("x", forceX<Node>((d) => d.ox).strength((d) => d.anchorStrength))
+    .force("y", forceY<Node>((d) => d.oy).strength((d) => d.anchorStrength))
     .stop();
   for (let i = 0; i < 250; i++) sim.tick();
 
-  const [x0, y0, x1, y1] = bbox;
+  const [x0, y0, x1, y1] = clampBox;
   const result = new Map<string, [number, number]>();
   for (const n of nodes) {
-    const x = Math.min(Math.max(n.x, x0 + n.r), x1 - n.r);
-    const y = Math.min(Math.max(n.y, y0 + n.r), y1 - n.r);
+    let x = Math.min(Math.max(n.x, x0 + n.r), x1 - n.r);
+    let y = Math.min(Math.max(n.y, y0 + n.r), y1 - n.r);
+    // Collision can, in rare cases, jostle an offshore bubble back onto land -- revert
+    // to its original seeded coastal point rather than leave it looking inland.
+    if (n.isOffshore && isInsideLand([x, y])) {
+      x = n.ox;
+      y = n.oy;
+    }
     result.set(n.id, [x, y]);
   }
   return result;
@@ -138,7 +216,44 @@ export default function CountryZoomMap({
   generationProjects?: GenerationProjectRow[];
 }) {
   const country = countryForZone(zoneCode);
-  const [openProject, setOpenProject] = useState<string | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
+  const [popup, setPopup] = useState<{ projectName: string; x: number; y: number } | null>(null);
+  const [popupPos, setPopupPos] = useState({ left: 0, top: 0 });
+
+  // Same clamping approach as WorldMap.tsx's country-click popup, adapted to hover:
+  // position at the real hover point (relative to this component's own container), then
+  // nudge back inside the container's edges so it's never cut off or drawn off-screen
+  // for a bubble near the border. Re-runs whenever the popup's own content changes size.
+  useLayoutEffect(() => {
+    if (!popup) return;
+    const container = containerRef.current;
+    const popupEl = popupRef.current;
+    const margin = 8;
+
+    if (!container || !popupEl) {
+      setPopupPos({ left: popup.x, top: popup.y + 12 });
+      return;
+    }
+
+    const containerRect = container.getBoundingClientRect();
+    const popupWidth = popupEl.offsetWidth;
+    const popupHeight = popupEl.offsetHeight;
+
+    let left = popup.x;
+    if (left + popupWidth + margin > containerRect.width) {
+      left = containerRect.width - popupWidth - margin;
+    }
+    if (left < margin) left = margin;
+
+    let top = popup.y + 12;
+    if (top + popupHeight + margin > containerRect.height) {
+      const above = popup.y - popupHeight - 12;
+      top = above >= margin ? above : Math.max(margin, containerRect.height - popupHeight - margin);
+    }
+
+    setPopupPos({ left, top });
+  }, [popup]);
 
   const targetFeature = useMemo(
     () => (country ? worldFeatures.find((f) => f.properties?.name === country) ?? null : null),
@@ -174,6 +289,17 @@ export default function CountryZoomMap({
     const xs = rings.flat().map((p) => p[0]);
     const ys = rings.flat().map((p) => p[1]);
     const bbox: [number, number, number, number] = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+    // Offshore bubbles are deliberately placed OUTSIDE the land bbox (in the "water");
+    // clamping declutter results to the land bbox alone would push them back onto the
+    // coast they were just moved off of, so widen the clamp box by the same offset used
+    // to place them plus a margin for the declutter step's own movement.
+    const seaMargin = COASTAL_OFFSET + MAX_R + 10;
+    const clampBox: [number, number, number, number] = [
+      bbox[0] - seaMargin,
+      bbox[1] - seaMargin,
+      bbox[2] + seaMargin,
+      bbox[3] + seaMargin,
+    ];
 
     // Sized by MAGNITUDE (Math.abs) -- a retirement (e.g. DE_LU's KVBG coal/lignite
     // phase-out, capacity_mw = -10211) is a real, large entry in this table, not an
@@ -187,13 +313,36 @@ export default function CountryZoomMap({
     const effectiveMaxR = Math.max(MIN_R + 4, Math.min(MAX_R, MAX_R * Math.sqrt(8 / Math.max(generationProjects.length, 1))));
 
     const seeds: (BubbleSeed & { project: GenerationProjectRow; isRetirement: boolean })[] = generationProjects.map((p) => {
-      const [x, y] = scatterPoint(p.project_name, rings, bbox);
+      const isOffshore = /offshore/i.test(p.technology ?? "");
+      // Real geodata (generation_nodes, joined in fetchGenerationProjects) always wins
+      // over the algorithmic placement below -- project() converts real lon/lat into the
+      // same pixel space scatterPoint/coastalPoint already operate in, so it flows
+      // through the identical declutter/collision step as everything else.
+      const geocoded =
+        p.latitude !== null && p.longitude !== null ? projection([p.longitude, p.latitude]) : null;
+      const isGeocoded = geocoded !== null;
+      const [x, y] = geocoded
+        ?? (isOffshore ? coastalPoint(p.project_name, rings, COASTAL_OFFSET) : scatterPoint(p.project_name, rings, bbox));
       const magnitude = p.capacity_mw !== null ? Math.abs(p.capacity_mw) : null;
       const r = magnitude && maxMagnitude ? MIN_R + (effectiveMaxR - MIN_R) * Math.sqrt(magnitude / maxMagnitude) : MIN_R;
-      return { id: p.project_name, x, y, r, project: p, isRetirement: p.capacity_mw !== null && p.capacity_mw < 0 };
+      return {
+        id: p.project_name,
+        x,
+        y,
+        r,
+        // A real coordinate should barely move even under heavy collision; an
+        // algorithmic offshore placement resists somewhat (so it doesn't get jostled
+        // back onto land by a crowded coastline); a plain land scatter point is the
+        // most free to move since it was arbitrary to begin with.
+        anchorStrength: isGeocoded ? 0.8 : isOffshore ? 0.4 : 0.12,
+        isOffshore,
+        isGeocoded,
+        project: p,
+        isRetirement: p.capacity_mw !== null && p.capacity_mw < 0,
+      };
     });
 
-    const declutteredPositions = declutter(seeds, bbox);
+    const declutteredPositions = declutter(seeds, clampBox, (pt) => pointInAnyRing(pt, rings));
 
     return seeds.map((s) => {
       const [px, py] = declutteredPositions.get(s.id) ?? [s.x, s.y];
@@ -201,7 +350,13 @@ export default function CountryZoomMap({
       // to geographic space so <Marker> (which projects internally) lands on our chosen
       // pixel point.
       const inverted = projection.invert ? projection.invert([px, py]) : null;
-      return { project: s.project, coordinates: inverted as [number, number] | null, radius: s.r, isRetirement: s.isRetirement };
+      return {
+        project: s.project,
+        coordinates: inverted as [number, number] | null,
+        radius: s.r,
+        isRetirement: s.isRetirement,
+        isGeocoded: s.isGeocoded,
+      };
     }).filter((b) => b.coordinates !== null);
   }, [targetFeature, projection, generationProjects]);
 
@@ -213,10 +368,10 @@ export default function CountryZoomMap({
     );
   }
 
-  const active = bubbles.find((b) => b.project.project_name === openProject);
+  const active = bubbles.find((b) => b.project.project_name === popup?.projectName);
 
   return (
-    <div className="relative" style={{ width: DISPLAY_WIDTH, height: DISPLAY_HEIGHT }}>
+    <div ref={containerRef} className="relative" style={{ width: DISPLAY_WIDTH, height: DISPLAY_HEIGHT }}>
       <div className="rounded-md overflow-hidden" style={{ background: "var(--surface-2)", height: DISPLAY_HEIGHT }}>
         <ComposableMap
           // @types/react-simple-maps types `projection` as a (width,height,config) =>
@@ -234,16 +389,25 @@ export default function CountryZoomMap({
           style={{ width: "100%", height: "100%" }}
         >
           <path d={countryPath} fill="var(--series-1)" stroke="var(--page-plane)" strokeWidth={1} style={{ outline: "none" }} />
-          {bubbles.map(({ project, coordinates, radius, isRetirement }) => (
+          {bubbles.map(({ project, coordinates, radius, isRetirement, isGeocoded }) => (
             <Marker key={project.project_name} coordinates={coordinates!}>
               <circle
                 r={radius}
                 fill={isRetirement ? "var(--status-critical)" : "var(--status-warning)"}
-                fillOpacity={openProject === project.project_name ? 0.95 : 0.75}
-                stroke="var(--surface-1)"
-                strokeWidth={1.5}
+                fillOpacity={popup?.projectName === project.project_name ? 0.95 : 0.75}
+                // A crisper, thicker ring marks a real, sourced location (see
+                // generation_nodes) apart from an algorithmically-placed one -- shown
+                // plainly rather than left for the user to guess at from position alone.
+                stroke={isGeocoded ? "var(--text-primary)" : "var(--surface-1)"}
+                strokeWidth={isGeocoded ? 2.5 : 1.5}
                 style={{ cursor: "pointer" }}
-                onClick={() => setOpenProject((v) => (v === project.project_name ? null : project.project_name))}
+                onMouseEnter={(event) => {
+                  const containerRect = containerRef.current?.getBoundingClientRect();
+                  const x = containerRect ? event.clientX - containerRect.left : event.clientX;
+                  const y = containerRect ? event.clientY - containerRect.top : event.clientY;
+                  setPopup({ projectName: project.project_name, x, y });
+                }}
+                onMouseLeave={() => setPopup(null)}
               />
             </Marker>
           ))}
@@ -252,20 +416,16 @@ export default function CountryZoomMap({
 
       {active && (
         <div
-          className="absolute z-20 top-full right-0 mt-2 w-72 rounded-lg border shadow-xl p-3"
-          style={{ background: "var(--surface-1)", borderColor: "var(--border-hairline)" }}
+          ref={popupRef}
+          className="absolute z-20 w-72 rounded-lg border shadow-xl p-3 pointer-events-none"
+          style={{
+            left: popupPos.left,
+            top: popupPos.top,
+            background: "var(--surface-1)",
+            borderColor: "var(--border-hairline)",
+          }}
         >
-          <div className="flex items-start justify-between mb-1">
-            <div className="text-sm font-medium pr-2">{active.project.project_name}</div>
-            <button
-              onClick={() => setOpenProject(null)}
-              className="text-xs shrink-0"
-              style={{ color: "var(--text-muted)" }}
-              aria-label="Close"
-            >
-              ✕
-            </button>
-          </div>
+          <div className="text-sm font-medium mb-1">{active.project.project_name}</div>
           <div className="text-xs" style={{ color: "var(--text-muted)" }}>
             {[active.project.technology, fmtMw(active.project.capacity_mw), active.project.commissioning_year]
               .filter(Boolean)
@@ -276,12 +436,30 @@ export default function CountryZoomMap({
               Confidence: {active.project.confidence}
             </div>
           )}
+          <div className="text-xs mt-1.5 pt-1.5" style={{ color: "var(--text-muted)", borderTop: "1px solid var(--gridline)" }}>
+            {active.isGeocoded ? (
+              <>
+                Real, sourced location
+                {active.project.location_source && (
+                  <> — {(() => {
+                    try {
+                      return new URL(active.project.location_source).hostname.replace(/^www\./, "");
+                    } catch {
+                      return active.project.location_source;
+                    }
+                  })()}</>
+                )}
+              </>
+            ) : (
+              "Approximate position — not this project's real site"
+            )}
+          </div>
         </div>
       )}
 
       {bubbles.length > 0 && (
         <p className="text-[10px] mt-1" style={{ color: "var(--text-muted)" }}>
-          Bubble size = capacity; position is scattered within the zone, not each project&apos;s real site — per-project coordinates aren&apos;t sourced yet.
+          Bubble size = capacity. Thick-ringed bubbles are real, sourced locations; thin-ringed ones are an approximate position within the zone only — hover for which is which.
         </p>
       )}
     </div>

@@ -51,16 +51,26 @@ export type GenerationProjectRow = {
   commissioning_year: number | null;
   confidence: string | null;
   note: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  location_source: string | null;
 };
 
+// generation_nodes (originally built Nordic-only, Sections 9.43-9.50's static chart
+// generation -- see _build_geo_tables.py) is the shared, project-wide geodata lookup: no
+// FK, joined by (area, name) = (zone_code, project_name). Not every project has a row
+// there yet -- lat/lon come back NULL for anything not yet geocoded, same as any other
+// not-yet-sourced field in this project.
 export async function fetchGenerationProjects(zoneCodes: string[]): Promise<GenerationProjectRow[]> {
   if (zoneCodes.length === 0) return [];
   const pool = getPool();
   const res = await pool.query<GenerationProjectRow>(
-    `SELECT zone_code, project_name, capacity_mw, technology, commissioning_year, confidence, note
-       FROM generation_projects
-      WHERE zone_code = ANY($1)
-      ORDER BY commissioning_year NULLS LAST, project_name`,
+    `SELECT gp.zone_code, gp.project_name, gp.capacity_mw, gp.technology, gp.commissioning_year,
+            gp.confidence, gp.note, gn.lat AS latitude, gn.lon AS longitude, gn.source AS location_source
+       FROM generation_projects gp
+       LEFT JOIN generation_nodes gn ON gn.area = gp.zone_code AND gn.name = gp.project_name
+      WHERE gp.zone_code = ANY($1)
+      ORDER BY gp.commissioning_year NULLS LAST, gp.project_name`,
     [zoneCodes]
   );
   return res.rows;
