@@ -10,6 +10,7 @@ import type {
 } from "@/lib/db";
 import SurplusMiniChart from "@/components/SurplusMiniChart";
 import TechMixChart from "@/components/TechMixChart";
+import CountryZoomMap from "@/components/CountryZoomMap";
 
 export type ZoneProfile = {
   zoneCode: string;
@@ -57,7 +58,12 @@ export default function ZoneProfileCard({
 
   return (
     <div className="card p-5 flex flex-col gap-5">
-      <h2 className="text-lg font-semibold">{displayName}</h2>
+      <div className="flex items-start justify-between gap-4">
+        <h2 className="text-lg font-semibold">{displayName}</h2>
+        <div className="w-48 shrink-0">
+          <CountryZoomMap zoneCode={profile.zoneCode} />
+        </div>
+      </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
