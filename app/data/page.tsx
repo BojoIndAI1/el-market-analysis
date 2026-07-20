@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import ZoneMultiSelect from "@/components/ZoneMultiSelect";
 import Waterfall from "@/components/Waterfall";
 import TechMixChart from "@/components/TechMixChart";
+import SurplusPerYearChart from "@/components/SurplusPerYearChart";
 import AllDataTable from "@/components/AllDataTable";
 import type { ContinentKey, ZoneRecord } from "@/lib/zones";
 import type { DataPageResponse } from "@/lib/aggregate";
@@ -160,6 +161,15 @@ function DataPageInner() {
               growth is shown as one aggregate step.
             </p>
             <Waterfall steps={data.bridgeGeneration} unit="TWh" />
+          </section>
+
+          <section className="card p-5 mb-6">
+            <h2 className="text-base font-semibold mb-1">Surplus / curtailment per year</h2>
+            <p className="text-xs mb-3" style={{ color: "var(--text-muted)" }}>
+              Oversupply = Generation Capacity + Imports − Demand − Exports, one bar per year
+              (bottom-up forecast, historical and projected).
+            </p>
+            <SurplusPerYearChart data={data.forecast} />
           </section>
 
           <section className="card p-5 mb-6">
