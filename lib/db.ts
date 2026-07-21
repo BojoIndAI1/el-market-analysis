@@ -54,6 +54,8 @@ export type GenerationProjectRow = {
   latitude: number | null;
   longitude: number | null;
   location_source: string | null;
+  state: string | null;
+  municipality: string | null;
 };
 
 // generation_nodes (originally built Nordic-only, Sections 9.43-9.50's static chart
@@ -66,7 +68,7 @@ export async function fetchGenerationProjects(zoneCodes: string[]): Promise<Gene
   const pool = getPool();
   const res = await pool.query<GenerationProjectRow>(
     `SELECT gp.zone_code, gp.project_name, gp.capacity_mw, gp.technology, gp.commissioning_year,
-            gp.confidence, gp.note, gn.lat AS latitude, gn.lon AS longitude, gn.source AS location_source
+            gp.confidence, gp.note, gp.state, gp.municipality, gn.lat AS latitude, gn.lon AS longitude, gn.source AS location_source
        FROM generation_projects gp
        LEFT JOIN generation_nodes gn ON gn.area = gp.zone_code AND gn.name = gp.project_name
       WHERE gp.zone_code = ANY($1)
