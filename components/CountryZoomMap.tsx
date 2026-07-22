@@ -9,6 +9,17 @@ import { feature } from "topojson-client";
 import worldTopology from "world-atlas/countries-110m.json";
 import { countryForZone } from "@/lib/countryZones";
 import type { GenerationProjectRow } from "@/lib/db";
+import { TECH_BUCKETS, TECH_BUCKET_COLOR, TECH_BUCKET_ORDER } from "@/lib/techBuckets";
+
+// Same bucketing the "Generation mix by technology" chart uses (TechMixChart.tsx), so a
+// technology reads as the same color everywhere on the page, not a second palette
+// invented just for this map.
+function techBucket(rawTechnology: string | null): string {
+  return TECH_BUCKETS[rawTechnology ?? ""] ?? "Other / conventional";
+}
+function techColor(rawTechnology: string | null): string {
+  return TECH_BUCKET_COLOR[techBucket(rawTechnology)] ?? "var(--series-1)";
+}
 
 const DISPLAY_WIDTH = 520;
 const DISPLAY_HEIGHT = 433;
@@ -452,6 +463,14 @@ export default function CountryZoomMap({
     }).filter((b) => b.coordinates !== null);
   }, [targetFeature, projection, bubbleSources]);
 
+  // Legend lists only technologies actually present in the current mode/zone, in the
+  // same canonical order as the "Generation mix by technology" chart -- not a fixed
+  // universal list that would show irrelevant swatches for a zone missing most of them.
+  const presentBuckets = useMemo(() => {
+    const present = new Set(bubbleSources.map((s) => techBucket(s.technology)));
+    return TECH_BUCKET_ORDER.filter((b) => present.has(b));
+  }, [bubbleSources]);
+
   if (!targetFeature || !projection) {
     return (
       <p className="text-xs" style={{ color: "var(--text-muted)" }}>
@@ -498,18 +517,24 @@ export default function CountryZoomMap({
           height={HEIGHT}
           style={{ width: "100%", height: "100%" }}
         >
-          <path d={countryPath} fill="var(--series-1)" stroke="var(--page-plane)" strokeWidth={1} style={{ outline: "none" }} />
+          {/* Neutral (not one of the 8 series colors) -- bubbles are colored by technology
+              below, and "Other / conventional" happens to reuse series-1, the same color
+              the land used to be filled with before per-technology coloring existed. */}
+          <path d={countryPath} fill="var(--baseline)" stroke="var(--page-plane)" strokeWidth={1} style={{ outline: "none" }} />
           {bubbles.map(({ source, coordinates, radius, isRetirement, isGeocoded }) => (
             <Marker key={source.id} coordinates={coordinates!}>
               <circle
                 r={radius}
-                fill={isRetirement ? "var(--status-critical)" : "var(--status-warning)"}
+                fill={techColor(source.technology)}
                 fillOpacity={popup?.id === source.id ? 0.95 : 0.75}
                 // A crisper, thicker ring marks a real, sourced location (see
                 // generation_nodes) apart from an algorithmically-placed one -- shown
                 // plainly rather than left for the user to guess at from position alone.
+                // A dashed ring marks a retirement/phase-out (negative capacity_mw) --
+                // moved here from fill color once fill started encoding technology instead.
                 stroke={isGeocoded ? "var(--text-primary)" : "var(--surface-1)"}
                 strokeWidth={isGeocoded ? 2.5 : 1.5}
+                strokeDasharray={isRetirement ? "3,2" : undefined}
                 style={{ cursor: "pointer" }}
                 onMouseEnter={(event) => {
                   const containerRect = containerRef.current?.getBoundingClientRect();
@@ -523,6 +548,22 @@ export default function CountryZoomMap({
           ))}
         </ComposableMap>
       </div>
+
+      {presentBuckets.length > 0 && (
+        <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2">
+          {presentBuckets.map((bucket) => (
+            <div key={bucket} className="flex items-center gap-1.5">
+              <span
+                className="inline-block rounded-full"
+                style={{ width: 9, height: 9, background: TECH_BUCKET_COLOR[bucket] ?? "var(--series-1)" }}
+              />
+              <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>
+                {bucket}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {active && (
         <div
@@ -595,8 +636,8 @@ export default function CountryZoomMap({
       {bubbles.length > 0 && (
         <p className="text-[10px] mt-1" style={{ color: "var(--text-muted)" }}>
           {mode === "individual"
-            ? "Bubble size = capacity. Thick-ringed bubbles are real, sourced locations; thin-ringed ones are an approximate position within the zone only — hover for which is which."
-            : `Bubble size = total capacity per ${mode === "state" ? "State" : "Municipality"} per technology. Thick-ringed bubbles average at least one real, sourced project location; thin-ringed ones are approximate — hover for detail.`}
+            ? "Bubble size = capacity, color = technology (see legend). Thick-ringed bubbles are real, sourced locations; thin-ringed ones are an approximate position within the zone only. Dashed ring = a retirement/phase-out, not a new project — hover for detail."
+            : `Bubble size = total capacity per ${mode === "state" ? "State" : "Municipality"} per technology, color = technology (see legend). Thick-ringed bubbles average at least one real, sourced project location; thin-ringed ones are approximate. Dashed ring = a net retirement/phase-out in that group — hover for detail.`}
         </p>
       )}
     </div>
