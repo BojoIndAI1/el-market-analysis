@@ -376,6 +376,23 @@ export default function CountryZoomMap({
     return geoPath(projection)(targetFeature as any) ?? undefined;
   }, [targetFeature, projection]);
 
+  // Drawn UNDER the active country, through the same fitted projection -- since that
+  // projection is scaled/translated to the target country's own extent (plus PADDING),
+  // whichever real neighbors happen to fall inside that box show up for free, in their
+  // real relative position, rather than a fabricated/simplified "neighbors" list. Muted
+  // (--gridline, lighter than the active country's --baseline in both themes) so the
+  // active country still reads as the highlighted one at a glance, same intent as
+  // WorldMap.tsx's tracked-vs-untracked country distinction.
+  const neighborPaths = useMemo(() => {
+    if (!projection) return [];
+    const path = geoPath(projection);
+    return worldFeatures
+      .filter((f) => f.properties?.name !== country)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .map((f) => ({ name: f.properties?.name, d: path(f as any) }))
+      .filter((f): f is { name: string; d: string } => !!f.d);
+  }, [projection, country]);
+
   const bubbleSources = useMemo(() => buildBubbleSources(mode, generationProjects), [mode, generationProjects]);
 
   // One bubble per BubbleSource (one real project in "individual" mode, one
@@ -482,7 +499,15 @@ export default function CountryZoomMap({
   const active = bubbles.find((b) => b.source.id === popup?.id);
 
   return (
-    <div ref={containerRef} className="relative" style={{ width: DISPLAY_WIDTH, height: DISPLAY_HEIGHT }}>
+    // Width only, deliberately no fixed height -- this wrapper also holds the mode-toggle
+    // buttons above the map and the legend/caption below it, whose combined height varies
+    // (more technologies -> legend wraps to more lines). A fixed height here (previously
+    // == DISPLAY_HEIGHT, matching only the map canvas below) let that extra content
+    // overflow past the box's bottom edge without growing it, so the next sibling in
+    // ZoneProfileCard's flex-col (the Surplus/Generation-mix charts row) started right
+    // where this box nominally ended, visually overlapping the spilled-over legend/caption
+    // text -- reproduced on a dense zone (many technologies -> multi-line legend).
+    <div ref={containerRef} className="relative" style={{ width: DISPLAY_WIDTH }}>
       <div className="flex gap-1 mb-2">
         {MAP_MODES.map(({ key, label }) => (
           <button
@@ -517,6 +542,20 @@ export default function CountryZoomMap({
           height={HEIGHT}
           style={{ width: "100%", height: "100%" }}
         >
+          {/* Real neighboring countries, for geographic context -- muted so the active
+              country (below) still reads as the highlighted one. Non-interactive: these
+              exist to orient the viewer, not to be clicked/hovered like WorldMap.tsx's
+              country picker. */}
+          {neighborPaths.map(({ name, d }) => (
+            <path
+              key={name}
+              d={d}
+              fill="var(--gridline)"
+              stroke="var(--page-plane)"
+              strokeWidth={0.5}
+              style={{ outline: "none", pointerEvents: "none" }}
+            />
+          ))}
           {/* Neutral (not one of the 8 series colors) -- bubbles are colored by technology
               below, and "Other / conventional" happens to reuse series-1, the same color
               the land used to be filled with before per-technology coloring existed. */}
