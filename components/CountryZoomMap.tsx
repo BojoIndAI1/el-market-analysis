@@ -158,6 +158,93 @@ function coastalPoint(seedStr: string, rings: Ring[], offset: number): [number, 
   return fallback ?? [0, 0];
 }
 
+type MapMode = "individual" | "state" | "municipality";
+
+const MAP_MODES: { key: MapMode; label: string }[] = [
+  { key: "individual", label: "Individual projects" },
+  { key: "state", label: "Per State" },
+  { key: "municipality", label: "Per Municipality" },
+];
+
+// Normalizes both display modes into one shape the placement/declutter/render pipeline
+// below can treat identically: "individual" wraps each real project 1:1; "state"/
+// "municipality" collapse every project sharing the same (region, technology) into one
+// aggregate bubble. Aggregating first, then feeding the SAME geometry pipeline used for
+// individual bubbles, avoids duplicating the scatter/coastal/declutter logic per mode.
+type BubbleSource = {
+  id: string;
+  technology: string | null;
+  capacityMw: number | null;
+  latitude: number | null;
+  longitude: number | null;
+  isGeocoded: boolean;
+} & (
+  | { kind: "project"; project: GenerationProjectRow }
+  | {
+      kind: "aggregate";
+      groupLabel: string;
+      groupBy: Exclude<MapMode, "individual">;
+      projectCount: number;
+      geocodedCount: number;
+      memberNames: string[];
+    }
+);
+
+function buildBubbleSources(mode: MapMode, generationProjects: GenerationProjectRow[]): BubbleSource[] {
+  if (mode === "individual") {
+    return generationProjects.map((p) => ({
+      id: p.project_name,
+      technology: p.technology,
+      capacityMw: p.capacity_mw,
+      latitude: p.latitude,
+      longitude: p.longitude,
+      isGeocoded: p.latitude !== null && p.longitude !== null,
+      kind: "project" as const,
+      project: p,
+    }));
+  }
+
+  // Grouped by (region, technology) -- e.g. "Bavaria::onshore_wind" -- not region alone,
+  // so the tech-mix character of a place is still visible as separate bubbles rather
+  // than one flattened blob per region.
+  const regionOf = (p: GenerationProjectRow) => (mode === "state" ? p.state : p.municipality) ?? "Unknown";
+  const groups = new Map<string, GenerationProjectRow[]>();
+  generationProjects.forEach((p) => {
+    const key = `${regionOf(p)}::${p.technology ?? "Unknown"}`;
+    const arr = groups.get(key) ?? [];
+    arr.push(p);
+    groups.set(key, arr);
+  });
+
+  return Array.from(groups.entries()).map(([key, members]) => {
+    const groupLabel = regionOf(members[0]);
+    const technology = members[0].technology ?? "Unknown";
+    const capacities = members.map((m) => m.capacity_mw).filter((c): c is number => c !== null);
+    const capacityMw = capacities.length > 0 ? capacities.reduce((a, b) => a + b, 0) : null;
+    const geocoded = members.filter((m) => m.latitude !== null && m.longitude !== null);
+    // Real position = average of whichever members are actually geocoded (a real,
+    // defensible representative point for this region+technology group); falls back to
+    // the same seeded scatter/coastal placement as an ungeocoded individual project when
+    // NONE of the group's members have a real site yet.
+    const latitude = geocoded.length > 0 ? geocoded.reduce((s, m) => s + m.latitude!, 0) / geocoded.length : null;
+    const longitude = geocoded.length > 0 ? geocoded.reduce((s, m) => s + m.longitude!, 0) / geocoded.length : null;
+    return {
+      id: key,
+      technology,
+      capacityMw,
+      latitude,
+      longitude,
+      isGeocoded: geocoded.length > 0,
+      kind: "aggregate" as const,
+      groupLabel,
+      groupBy: mode,
+      projectCount: members.length,
+      geocodedCount: geocoded.length,
+      memberNames: members.map((m) => m.project_name),
+    };
+  });
+}
+
 type BubbleSeed = {
   id: string;
   x: number;
@@ -218,7 +305,8 @@ export default function CountryZoomMap({
   const country = countryForZone(zoneCode);
   const containerRef = useRef<HTMLDivElement>(null);
   const popupRef = useRef<HTMLDivElement>(null);
-  const [popup, setPopup] = useState<{ projectName: string; x: number; y: number } | null>(null);
+  const [mode, setMode] = useState<MapMode>("individual");
+  const [popup, setPopup] = useState<{ id: string; x: number; y: number } | null>(null);
   const [popupPos, setPopupPos] = useState({ left: 0, top: 0 });
 
   // Same clamping approach as WorldMap.tsx's country-click popup, adapted to hover:
@@ -277,11 +365,13 @@ export default function CountryZoomMap({
     return geoPath(projection)(targetFeature as any) ?? undefined;
   }, [targetFeature, projection]);
 
-  // One bubble per project. Seeded by rejection-sampling a point inside the country's
-  // own (projected) silhouette, then decluttered against every other project's bubble
-  // so they don't overlap -- NOT each project's real site. generation_projects has no
-  // lat/lon columns yet; this is an honest "somewhere in this zone" indicator (see the
-  // caption below the map), not a claim of precise siting.
+  const bubbleSources = useMemo(() => buildBubbleSources(mode, generationProjects), [mode, generationProjects]);
+
+  // One bubble per BubbleSource (one real project in "individual" mode, one
+  // region+technology group in "state"/"municipality" mode). Seeded by rejection-sampling
+  // a point inside the country's own (projected) silhouette, then decluttered against
+  // every other bubble so they don't overlap -- NOT a claim of precise siting for
+  // whichever sources lack real geodata (see the caption below the map).
   const bubbles = useMemo(() => {
     if (!targetFeature || !projection) return [];
     const rings = projectRings(targetFeature.geometry, projection);
@@ -304,29 +394,31 @@ export default function CountryZoomMap({
     // Sized by MAGNITUDE (Math.abs) -- a retirement (e.g. DE_LU's KVBG coal/lignite
     // phase-out, capacity_mw = -10211) is a real, large entry in this table, not an
     // addition, and negative input would otherwise produce Math.sqrt(negative) = NaN,
-    // silently dropping the bubble. Scale is computed from magnitudes across ALL
-    // projects (additions and retirements together) so the two are visually comparable.
-    const magnitudes = generationProjects.map((p) => p.capacity_mw).filter((c): c is number => c !== null && c !== 0).map(Math.abs);
+    // silently dropping the bubble. Scale is computed from magnitudes across ALL sources
+    // (additions and retirements together) so the two are visually comparable. Computed
+    // per-mode (not shared across modes) since aggregate totals are naturally larger
+    // than any single project's capacity.
+    const magnitudes = bubbleSources.map((s) => s.capacityMw).filter((c): c is number => c !== null && c !== 0).map(Math.abs);
     const maxMagnitude = magnitudes.length > 0 ? Math.max(...magnitudes) : null;
     // Denser zones get a smaller effective max radius so the declutter step below has
-    // room to work with, rather than fighting oversized circles on a 25-project zone.
-    const effectiveMaxR = Math.max(MIN_R + 4, Math.min(MAX_R, MAX_R * Math.sqrt(8 / Math.max(generationProjects.length, 1))));
+    // room to work with, rather than fighting oversized circles on a 25-bubble zone.
+    const effectiveMaxR = Math.max(MIN_R + 4, Math.min(MAX_R, MAX_R * Math.sqrt(8 / Math.max(bubbleSources.length, 1))));
 
-    const seeds: (BubbleSeed & { project: GenerationProjectRow; isRetirement: boolean })[] = generationProjects.map((p) => {
-      const isOffshore = /offshore/i.test(p.technology ?? "");
-      // Real geodata (generation_nodes, joined in fetchGenerationProjects) always wins
-      // over the algorithmic placement below -- project() converts real lon/lat into the
-      // same pixel space scatterPoint/coastalPoint already operate in, so it flows
-      // through the identical declutter/collision step as everything else.
-      const geocoded =
-        p.latitude !== null && p.longitude !== null ? projection([p.longitude, p.latitude]) : null;
+    const seeds: (BubbleSeed & { source: BubbleSource; isRetirement: boolean })[] = bubbleSources.map((s) => {
+      const isOffshore = /offshore/i.test(s.technology ?? "");
+      // Real geodata (generation_nodes, joined in fetchGenerationProjects; averaged
+      // across a group's geocoded members in aggregate mode) always wins over the
+      // algorithmic placement below -- project() converts real lon/lat into the same
+      // pixel space scatterPoint/coastalPoint already operate in, so it flows through
+      // the identical declutter/collision step as everything else.
+      const geocoded = s.latitude !== null && s.longitude !== null ? projection([s.longitude, s.latitude]) : null;
       const isGeocoded = geocoded !== null;
       const [x, y] = geocoded
-        ?? (isOffshore ? coastalPoint(p.project_name, rings, COASTAL_OFFSET) : scatterPoint(p.project_name, rings, bbox));
-      const magnitude = p.capacity_mw !== null ? Math.abs(p.capacity_mw) : null;
+        ?? (isOffshore ? coastalPoint(s.id, rings, COASTAL_OFFSET) : scatterPoint(s.id, rings, bbox));
+      const magnitude = s.capacityMw !== null ? Math.abs(s.capacityMw) : null;
       const r = magnitude && maxMagnitude ? MIN_R + (effectiveMaxR - MIN_R) * Math.sqrt(magnitude / maxMagnitude) : MIN_R;
       return {
-        id: p.project_name,
+        id: s.id,
         x,
         y,
         r,
@@ -337,8 +429,8 @@ export default function CountryZoomMap({
         anchorStrength: isGeocoded ? 0.8 : isOffshore ? 0.4 : 0.12,
         isOffshore,
         isGeocoded,
-        project: p,
-        isRetirement: p.capacity_mw !== null && p.capacity_mw < 0,
+        source: s,
+        isRetirement: s.capacityMw !== null && s.capacityMw < 0,
       };
     });
 
@@ -351,14 +443,14 @@ export default function CountryZoomMap({
       // pixel point.
       const inverted = projection.invert ? projection.invert([px, py]) : null;
       return {
-        project: s.project,
+        source: s.source,
         coordinates: inverted as [number, number] | null,
         radius: s.r,
         isRetirement: s.isRetirement,
         isGeocoded: s.isGeocoded,
       };
     }).filter((b) => b.coordinates !== null);
-  }, [targetFeature, projection, generationProjects]);
+  }, [targetFeature, projection, bubbleSources]);
 
   if (!targetFeature || !projection) {
     return (
@@ -368,10 +460,28 @@ export default function CountryZoomMap({
     );
   }
 
-  const active = bubbles.find((b) => b.project.project_name === popup?.projectName);
+  const active = bubbles.find((b) => b.source.id === popup?.id);
 
   return (
     <div ref={containerRef} className="relative" style={{ width: DISPLAY_WIDTH, height: DISPLAY_HEIGHT }}>
+      <div className="flex gap-1 mb-2">
+        {MAP_MODES.map(({ key, label }) => (
+          <button
+            key={key}
+            onClick={() => {
+              setMode(key);
+              setPopup(null);
+            }}
+            className="px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors"
+            style={{
+              background: mode === key ? "var(--series-1)" : "var(--surface-2)",
+              color: mode === key ? "var(--page-plane)" : "var(--text-muted)",
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
       <div className="rounded-md overflow-hidden" style={{ background: "var(--surface-2)", height: DISPLAY_HEIGHT }}>
         <ComposableMap
           // @types/react-simple-maps types `projection` as a (width,height,config) =>
@@ -389,12 +499,12 @@ export default function CountryZoomMap({
           style={{ width: "100%", height: "100%" }}
         >
           <path d={countryPath} fill="var(--series-1)" stroke="var(--page-plane)" strokeWidth={1} style={{ outline: "none" }} />
-          {bubbles.map(({ project, coordinates, radius, isRetirement, isGeocoded }) => (
-            <Marker key={project.project_name} coordinates={coordinates!}>
+          {bubbles.map(({ source, coordinates, radius, isRetirement, isGeocoded }) => (
+            <Marker key={source.id} coordinates={coordinates!}>
               <circle
                 r={radius}
                 fill={isRetirement ? "var(--status-critical)" : "var(--status-warning)"}
-                fillOpacity={popup?.projectName === project.project_name ? 0.95 : 0.75}
+                fillOpacity={popup?.id === source.id ? 0.95 : 0.75}
                 // A crisper, thicker ring marks a real, sourced location (see
                 // generation_nodes) apart from an algorithmically-placed one -- shown
                 // plainly rather than left for the user to guess at from position alone.
@@ -405,7 +515,7 @@ export default function CountryZoomMap({
                   const containerRect = containerRef.current?.getBoundingClientRect();
                   const x = containerRect ? event.clientX - containerRect.left : event.clientX;
                   const y = containerRect ? event.clientY - containerRect.top : event.clientY;
-                  setPopup({ projectName: project.project_name, x, y });
+                  setPopup({ id: source.id, x, y });
                 }}
                 onMouseLeave={() => setPopup(null)}
               />
@@ -425,41 +535,68 @@ export default function CountryZoomMap({
             borderColor: "var(--border-hairline)",
           }}
         >
-          <div className="text-sm font-medium mb-1">{active.project.project_name}</div>
-          <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-            {[active.project.technology, fmtMw(active.project.capacity_mw), active.project.commissioning_year]
-              .filter(Boolean)
-              .join(" · ")}
-          </div>
-          {active.project.confidence && (
-            <div className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>
-              Confidence: {active.project.confidence}
-            </div>
-          )}
-          <div className="text-xs mt-1.5 pt-1.5" style={{ color: "var(--text-muted)", borderTop: "1px solid var(--gridline)" }}>
-            {active.isGeocoded ? (
-              <>
-                Real, sourced location
-                {active.project.location_source && (
-                  <> — {(() => {
-                    try {
-                      return new URL(active.project.location_source).hostname.replace(/^www\./, "");
-                    } catch {
-                      return active.project.location_source;
-                    }
-                  })()}</>
+          {active.source.kind === "project" ? (
+            <>
+              <div className="text-sm font-medium mb-1">{active.source.project.project_name}</div>
+              <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+                {[active.source.project.technology, fmtMw(active.source.project.capacity_mw), active.source.project.commissioning_year]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </div>
+              {active.source.project.confidence && (
+                <div className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>
+                  Confidence: {active.source.project.confidence}
+                </div>
+              )}
+              <div className="text-xs mt-1.5 pt-1.5" style={{ color: "var(--text-muted)", borderTop: "1px solid var(--gridline)" }}>
+                {active.isGeocoded ? (
+                  <>
+                    Real, sourced location
+                    {active.source.project.location_source && (
+                      <> — {(() => {
+                        try {
+                          return new URL(active.source.project.location_source).hostname.replace(/^www\./, "");
+                        } catch {
+                          return active.source.project.location_source;
+                        }
+                      })()}</>
+                    )}
+                  </>
+                ) : (
+                  "Approximate position — not this project's real site"
                 )}
-              </>
-            ) : (
-              "Approximate position — not this project's real site"
-            )}
-          </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="text-sm font-medium mb-1">{active.source.groupLabel}</div>
+              <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+                {[active.source.technology, fmtMw(active.source.capacityMw)].filter(Boolean).join(" · ")}
+              </div>
+              <div className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>
+                {active.source.projectCount} project{active.source.projectCount === 1 ? "" : "s"}
+              </div>
+              <div className="text-xs mt-1.5 pt-1.5" style={{ color: "var(--text-muted)", borderTop: "1px solid var(--gridline)" }}>
+                {active.source.memberNames.slice(0, 6).join(", ")}
+                {active.source.memberNames.length > 6 && ` +${active.source.memberNames.length - 6} more`}
+              </div>
+              <div className="text-xs mt-1.5 pt-1.5" style={{ color: "var(--text-muted)", borderTop: "1px solid var(--gridline)" }}>
+                {active.source.geocodedCount === 0
+                  ? "Approximate position — no member project has a real, sourced site yet"
+                  : active.source.geocodedCount === active.source.projectCount
+                  ? "Real, sourced location (averaged across all member projects)"
+                  : `Real, sourced location (averaged across ${active.source.geocodedCount} of ${active.source.projectCount} member projects with a known site)`}
+              </div>
+            </>
+          )}
         </div>
       )}
 
       {bubbles.length > 0 && (
         <p className="text-[10px] mt-1" style={{ color: "var(--text-muted)" }}>
-          Bubble size = capacity. Thick-ringed bubbles are real, sourced locations; thin-ringed ones are an approximate position within the zone only — hover for which is which.
+          {mode === "individual"
+            ? "Bubble size = capacity. Thick-ringed bubbles are real, sourced locations; thin-ringed ones are an approximate position within the zone only — hover for which is which."
+            : `Bubble size = total capacity per ${mode === "state" ? "State" : "Municipality"} per technology. Thick-ringed bubbles average at least one real, sourced project location; thin-ringed ones are approximate — hover for detail.`}
         </p>
       )}
     </div>
