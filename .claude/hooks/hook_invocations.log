@@ -44,3 +44,6 @@
 2026-07-22T23:54:49  MATCHED: linting app\dev-preview-map\page.tsx
 2026-07-22T23:57:42  MATCHED: linting components\CountryZoomMap.tsx
 2026-07-22T23:58:47  MATCHED: linting app\dev-preview-map\page.tsx
+2026-07-23T00:11:10  MATCHED: linting components\CountryZoomMap.tsx
+2026-07-23T00:11:22  MATCHED: linting components\ZoneProfileCard.tsx
+2026-07-23T00:11:35  MATCHED: linting app\dev-preview-map\page.tsx

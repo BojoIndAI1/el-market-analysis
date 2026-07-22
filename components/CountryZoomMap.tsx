@@ -21,21 +21,25 @@ function techColor(rawTechnology: string | null): string {
   return TECH_BUCKET_COLOR[techBucket(rawTechnology)] ?? "var(--series-1)";
 }
 
-const DISPLAY_WIDTH = 520;
-const DISPLAY_HEIGHT = 433;
+// 40% larger than the original 520x433 -- PADDING/MIN_R/MAX_R/COASTAL_OFFSET are scaled by
+// the same 1.4x factor (not left at their old absolute pixel values) so the enlarged map
+// looks like a uniformly bigger version of the same design, not a bigger canvas with
+// relatively tinier bubbles and relatively tighter padding.
+const DISPLAY_WIDTH = 728;
+const DISPLAY_HEIGHT = 606;
 const WIDTH = DISPLAY_WIDTH * 2;
 const HEIGHT = DISPLAY_HEIGHT * 2;
-const PADDING = 28;
-const MIN_R = 7;
+const PADDING = 39;
+const MIN_R = 10;
 // Effective max bubble radius scales DOWN as project count goes up, referenced against
 // 8 projects feeling comfortable at MAX_R -- gives the collision-declutter step below
 // more room to work with on dense zones (DE_LU's 25) instead of fighting oversized
 // circles, without shrinking every zone uniformly regardless of how crowded it is.
-const MAX_R = 34;
+const MAX_R = 48;
 // How far outside the coastline an offshore project's bubble is placed (internal
-// 1040x866 pixel space) -- far enough to read clearly as "in the water", not so far it
+// 1456x1212 pixel space) -- far enough to read clearly as "in the water", not so far it
 // drifts toward open ocean or off the visible canvas.
-const COASTAL_OFFSET = 26;
+const COASTAL_OFFSET = 36;
 
 type WorldFeature = { properties?: { name?: string }; geometry: { type: string; coordinates: unknown } };
 type Ring = [number, number][];

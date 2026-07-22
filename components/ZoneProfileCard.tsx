@@ -20,7 +20,7 @@ import TechMixChart from "@/components/TechMixChart";
 // hydration-mismatch warning + extra re-render on every page load.
 const CountryZoomMap = dynamic(() => import("@/components/CountryZoomMap"), {
   ssr: false,
-  loading: () => <div style={{ width: 520, height: 433 }} />,
+  loading: () => <div style={{ width: 728, height: 606 }} />,
 });
 
 export type ZoneProfile = {
