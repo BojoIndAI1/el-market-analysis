@@ -632,7 +632,14 @@ export default function CountryZoomMap({
                 // A dashed ring marks a retirement/phase-out (negative capacity_mw) --
                 // moved here from fill color once fill started encoding technology instead.
                 stroke={isGeocoded ? "var(--text-primary)" : "var(--surface-1)"}
-                strokeWidth={isGeocoded ? 2.5 : 1.5}
+                // Scaled down for small radii, capped at the same 2.5/1.5 used for
+                // medium+ dots -- a flat stroke width made the MIN_R-sized dots (most
+                // wind projects are geocoded, so most tiny dots hit the isGeocoded case)
+                // look chunky regardless of their true small radius, since a 2.5px ring
+                // is bigger than a 2px radius fill. Real bug, not cosmetic: verified live
+                // on el-market-analysis.online that the radius fix alone didn't read as
+                // "tiny" because of this.
+                strokeWidth={Math.min(isGeocoded ? 2.5 : 1.5, radius * 0.6)}
                 strokeDasharray={isRetirement ? "3,2" : undefined}
                 style={{ cursor: "pointer" }}
                 onMouseEnter={(event) => {
