@@ -112,20 +112,6 @@ function mulberry32(seed: number) {
   };
 }
 
-// Linear-interpolated percentile of an already-sorted array. Used to scale bubble radius
-// against a robust reference point instead of the raw max -- see its call site's own
-// comment for why (a single zone-wide aggregate entry can be 10-100x any real individual
-// project's capacity, and scaling against that raw max crushes everyone else's size
-// differentiation).
-function percentile(sorted: number[], p: number): number {
-  if (sorted.length === 0) return 0;
-  const idx = (sorted.length - 1) * p;
-  const lo = Math.floor(idx);
-  const hi = Math.ceil(idx);
-  if (lo === hi) return sorted[lo];
-  return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo);
-}
-
 function scatterPoint(seedStr: string, rings: Ring[], bbox: [number, number, number, number]): [number, number] {
   const rand = mulberry32(hashString(seedStr));
   const [x0, y0, x1, y1] = bbox;
@@ -464,16 +450,18 @@ export default function CountryZoomMap({
     // per-mode (not shared across modes) since aggregate totals are naturally larger
     // than any single project's capacity.
     //
-    // The "large" end of the scale is still the 95th percentile, NOT the raw max -- a
-    // zone-wide policy aggregate (DE_LU's -10211MW lignite phase-out is a national figure,
-    // not one physical plant) can be 10-100x any real individual project's capacity, and
-    // scaling against that raw max would collapse the real 50-2000MW range of genuine
-    // projects into a barely-different sliver. The true outlier still renders at MAX_R
-    // (clamped, see the radius formula below); only everyone else's differentiation
-    // depends on this reference point.
+    // The "large" end of the scale is the raw max magnitude present, but the radius
+    // formula below maps it via a LOG scale, not linear -- reproduced live on
+    // el-market-analysis.online: a linear scale clamped at the 95th percentile still
+    // flattened the top of the range, since real DE_LU wind/solar projects have plenty of
+    // entries AT or ABOVE that percentile cutoff (a 57.6MW wind park and DE_LU's 2000MW
+    // offshore project and its -10211MW lignite-retirement aggregate all clamped to the
+    // same MAX_R). Capacities here span >2 orders of magnitude (50MW threshold to
+    // 10,211MW), which is exactly the case log scales exist for: each order of magnitude
+    // gets an equal visual "slice" of the range, so 57.6MW, 180MW, 2000MW, and 10,211MW
+    // all land at meaningfully different radii instead of a handful of buckets.
     const magnitudes = bubbleSources.map((s) => s.capacityMw).filter((c): c is number => c !== null && c !== 0).map(Math.abs);
-    const sortedMagnitudes = [...magnitudes].sort((a, b) => a - b);
-    const scaleMagnitude = sortedMagnitudes.length > 0 ? percentile(sortedMagnitudes, 0.95) : null;
+    const maxMagnitude = magnitudes.length > 0 ? Math.max(...magnitudes) : null;
     // Previously shrank toward MIN_R as project count went up (written when "dense" meant
     // ~25 projects) -- on DE_LU's 3,700+ individual wind/solar dots (post-MaStR import)
     // that collapsed the WHOLE usable range to a ~4px sliver, which is exactly why small
@@ -498,19 +486,27 @@ export default function CountryZoomMap({
         ?? (isOffshore ? coastalPoint(s.id, rings, COASTAL_OFFSET) : scatterPoint(s.id, rings, bbox));
       const magnitude = s.capacityMw !== null ? Math.abs(s.capacityMw) : null;
       // Direct user spec: everything at/below SMALL_PROJECT_THRESHOLD_MW (50MW) renders
-      // flat at MIN_R, no curve-fitting -- replaces an earlier squared-percentile curve
-      // that still left small projects looking medium-sized in practice. Above the
-      // threshold, radius scales LINEARLY up to MAX_R at the 95th-percentile scale point
-      // (clamped beyond that, so the zone-wide retirement/gas outliers still cap out at
-      // MAX_R instead of stretching the scale for every real project below them). If the
-      // scale point itself doesn't clear the threshold (a zone with nothing meaningfully
-      // large), everything just stays at MIN_R rather than dividing by a near-zero range.
+      // flat at MIN_R, no curve-fitting. Above the threshold, radius scales on a LOG of
+      // magnitude up to MAX_R at the true max (see that variable's own comment for why
+      // log, not linear) -- a plain linear-to-the-max scale would instead crush every
+      // real project back down near MIN_R (the original bug this whole scale exists to
+      // fix), and a linear-to-a-percentile scale clamps everything above that percentile
+      // together (the bug this replaces). If the max itself doesn't clear the threshold
+      // (a zone with nothing meaningfully large), everything just stays at MIN_R rather
+      // than feeding a non-positive value into Math.log.
       const r =
-        !magnitude || magnitude <= SMALL_PROJECT_THRESHOLD_MW || !scaleMagnitude || scaleMagnitude <= SMALL_PROJECT_THRESHOLD_MW
+        !magnitude || magnitude <= SMALL_PROJECT_THRESHOLD_MW || !maxMagnitude || maxMagnitude <= SMALL_PROJECT_THRESHOLD_MW
           ? MIN_R
           : MIN_R +
             (effectiveMaxR - MIN_R) *
-              Math.min((magnitude - SMALL_PROJECT_THRESHOLD_MW) / (scaleMagnitude - SMALL_PROJECT_THRESHOLD_MW), 1);
+              Math.min(
+                Math.max(
+                  (Math.log(magnitude) - Math.log(SMALL_PROJECT_THRESHOLD_MW)) /
+                    (Math.log(maxMagnitude) - Math.log(SMALL_PROJECT_THRESHOLD_MW)),
+                  0
+                ),
+                1
+              );
       return {
         id: s.id,
         x,
