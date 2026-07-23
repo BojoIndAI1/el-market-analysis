@@ -30,11 +30,10 @@ const DISPLAY_HEIGHT = 606;
 const WIDTH = DISPLAY_WIDTH * 2;
 const HEIGHT = DISPLAY_HEIGHT * 2;
 const PADDING = 39;
-const MIN_R = 10;
-// Effective max bubble radius scales DOWN as project count goes up, referenced against
-// 8 projects feeling comfortable at MAX_R -- gives the collision-declutter step below
-// more room to work with on dense zones (DE_LU's 25) instead of fighting oversized
-// circles, without shrinking every zone uniformly regardless of how crowded it is.
+// Genuinely tiny -- a small project should read as a small dot, not just a slightly
+// smaller medium dot (see MAX_R's own comment for the density-shrink this used to pair
+// with, since removed).
+const MIN_R = 3;
 const MAX_R = 48;
 // How far outside the coastline an offshore project's bubble is placed (internal
 // 1456x1212 pixel space) -- far enough to read clearly as "in the water", not so far it
@@ -471,9 +470,16 @@ export default function CountryZoomMap({
     const magnitudes = bubbleSources.map((s) => s.capacityMw).filter((c): c is number => c !== null && c !== 0).map(Math.abs);
     const sortedMagnitudes = [...magnitudes].sort((a, b) => a - b);
     const scaleMagnitude = sortedMagnitudes.length > 0 ? percentile(sortedMagnitudes, 0.95) : null;
-    // Denser zones get a smaller effective max radius so the declutter step below has
-    // room to work with, rather than fighting oversized circles on a 25-bubble zone.
-    const effectiveMaxR = Math.max(MIN_R + 4, Math.min(MAX_R, MAX_R * Math.sqrt(8 / Math.max(bubbleSources.length, 1))));
+    // Previously shrank toward MIN_R as project count went up (written when "dense" meant
+    // ~25 projects) -- on DE_LU's 3,700+ individual wind/solar dots (post-MaStR import)
+    // that collapsed the WHOLE usable range to a ~4px sliver, which is exactly why small
+    // and large real projects rendered as visually the same size regardless of the
+    // percentile-scaling fix above. Removed: with MIN_R now genuinely tiny and radius
+    // scaled against the 95th percentile (not the raw max), most projects are naturally
+    // small already -- only the top ~5% approach MAX_R -- so total on-screen "ink" is
+    // lower than the old uniform-medium-everywhere look, not higher; declutter has MORE
+    // room to work with, not less.
+    const effectiveMaxR = MAX_R;
 
     const seeds: (BubbleSeed & { source: BubbleSource; isRetirement: boolean })[] = bubbleSources.map((s) => {
       const isOffshore = /offshore/i.test(s.technology ?? "");
@@ -487,9 +493,15 @@ export default function CountryZoomMap({
       const [x, y] = geocoded
         ?? (isOffshore ? coastalPoint(s.id, rings, COASTAL_OFFSET) : scatterPoint(s.id, rings, bbox));
       const magnitude = s.capacityMw !== null ? Math.abs(s.capacityMw) : null;
+      // Linear in magnitude, not sqrt -- sqrt is the usual area-proportional bubble-map
+      // convention (radius ~ sqrt(value) so AREA reads as proportional to value), but its
+      // concavity boosts small ratios more than it looks: even a project at 12% of the
+      // scale point renders at ~35% of the size range under sqrt. Reproduced on DE_LU's
+      // real data -- median radius came out at 22.8 of a 3-48 range, i.e. "small" projects
+      // still looked medium-sized. Linear makes a small project actually look small.
       const r =
         magnitude && scaleMagnitude
-          ? MIN_R + (effectiveMaxR - MIN_R) * Math.sqrt(Math.min(magnitude / scaleMagnitude, 1))
+          ? MIN_R + (effectiveMaxR - MIN_R) * Math.min(magnitude / scaleMagnitude, 1)
           : MIN_R;
       return {
         id: s.id,
