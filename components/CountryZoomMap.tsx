@@ -108,6 +108,20 @@ function mulberry32(seed: number) {
   };
 }
 
+// Linear-interpolated percentile of an already-sorted array. Used to scale bubble radius
+// against a robust reference point instead of the raw max -- see its call site's own
+// comment for why (a single zone-wide aggregate entry can be 10-100x any real individual
+// project's capacity, and scaling against that raw max crushes everyone else's size
+// differentiation).
+function percentile(sorted: number[], p: number): number {
+  if (sorted.length === 0) return 0;
+  const idx = (sorted.length - 1) * p;
+  const lo = Math.floor(idx);
+  const hi = Math.ceil(idx);
+  if (lo === hi) return sorted[lo];
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo);
+}
+
 function scatterPoint(seedStr: string, rings: Ring[], bbox: [number, number, number, number]): [number, number] {
   const rand = mulberry32(hashString(seedStr));
   const [x0, y0, x1, y1] = bbox;
@@ -305,6 +319,21 @@ function declutter(
       x = n.ox;
       y = n.oy;
     }
+    // Symmetric case for ordinary land bubbles: on a very dense zone (DE_LU's 2,600+
+    // wind + 1,100 solar projects in "Individual projects" mode) the collision force can
+    // push a bubble past the country's real coastline into the clampBox's rectangular
+    // corners -- which clampBox alone doesn't catch, since it's a bounding box, not the
+    // country's actual (non-rectangular) shape. Every land seed (scatterPoint's rejection
+    // sampling, or a real geocoded lon/lat) starts out valid, so reverting to that
+    // original seed on violation is always a safe fallback, exactly like the offshore
+    // case above. This was invisible before neighboring countries were drawn (the
+    // clampBox corners were just blank background); with real neighbors now filling that
+    // same area, a reverted-to-original-seed miss would otherwise render sitting on a
+    // neighboring country's own shape.
+    if (!n.isOffshore && !isInsideLand([x, y])) {
+      x = n.ox;
+      y = n.oy;
+    }
     result.set(n.id, [x, y]);
   }
   return result;
@@ -430,8 +459,18 @@ export default function CountryZoomMap({
     // (additions and retirements together) so the two are visually comparable. Computed
     // per-mode (not shared across modes) since aggregate totals are naturally larger
     // than any single project's capacity.
+    //
+    // Scaled against the 95th percentile, NOT the raw max, and the ratio is clamped to 1
+    // in the radius formula below -- a zone-wide policy aggregate (DE_LU's -10211MW
+    // lignite phase-out is a national figure, not one physical plant) can be 10-100x any
+    // real individual project's capacity. Scaling everyone against that raw max collapses
+    // the real, meaningful size difference between e.g. a 12MW and a 180MW wind project
+    // into a barely-different sliver near MIN_R -- reproduced on DE_LU's real data. The
+    // true outlier itself still renders at effectiveMaxR (same as scaling against the raw
+    // max would have given it); only everyone else's differentiation is restored.
     const magnitudes = bubbleSources.map((s) => s.capacityMw).filter((c): c is number => c !== null && c !== 0).map(Math.abs);
-    const maxMagnitude = magnitudes.length > 0 ? Math.max(...magnitudes) : null;
+    const sortedMagnitudes = [...magnitudes].sort((a, b) => a - b);
+    const scaleMagnitude = sortedMagnitudes.length > 0 ? percentile(sortedMagnitudes, 0.95) : null;
     // Denser zones get a smaller effective max radius so the declutter step below has
     // room to work with, rather than fighting oversized circles on a 25-bubble zone.
     const effectiveMaxR = Math.max(MIN_R + 4, Math.min(MAX_R, MAX_R * Math.sqrt(8 / Math.max(bubbleSources.length, 1))));
@@ -448,7 +487,10 @@ export default function CountryZoomMap({
       const [x, y] = geocoded
         ?? (isOffshore ? coastalPoint(s.id, rings, COASTAL_OFFSET) : scatterPoint(s.id, rings, bbox));
       const magnitude = s.capacityMw !== null ? Math.abs(s.capacityMw) : null;
-      const r = magnitude && maxMagnitude ? MIN_R + (effectiveMaxR - MIN_R) * Math.sqrt(magnitude / maxMagnitude) : MIN_R;
+      const r =
+        magnitude && scaleMagnitude
+          ? MIN_R + (effectiveMaxR - MIN_R) * Math.sqrt(Math.min(magnitude / scaleMagnitude, 1))
+          : MIN_R;
       return {
         id: s.id,
         x,
