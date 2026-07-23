@@ -30,10 +30,11 @@ const DISPLAY_HEIGHT = 606;
 const WIDTH = DISPLAY_WIDTH * 2;
 const HEIGHT = DISPLAY_HEIGHT * 2;
 const PADDING = 39;
-// Genuinely tiny -- a small project should read as a small dot, not just a slightly
-// smaller medium dot (see MAX_R's own comment for the density-shrink this used to pair
-// with, since removed).
-const MIN_R = 3;
+// As small as practically renderable/hoverable while still reading as a real dot, not a
+// slightly-smaller medium dot (see MAX_R's own comment for the density-shrink this used to
+// pair with, since removed, and the radius formula below for the curve that gets most
+// projects actually down near this floor).
+const MIN_R = 2;
 const MAX_R = 48;
 // How far outside the coastline an offshore project's bubble is placed (internal
 // 1456x1212 pixel space) -- far enough to read clearly as "in the water", not so far it
@@ -493,16 +494,17 @@ export default function CountryZoomMap({
       const [x, y] = geocoded
         ?? (isOffshore ? coastalPoint(s.id, rings, COASTAL_OFFSET) : scatterPoint(s.id, rings, bbox));
       const magnitude = s.capacityMw !== null ? Math.abs(s.capacityMw) : null;
-      // Linear in magnitude, not sqrt -- sqrt is the usual area-proportional bubble-map
+      // Squared, not linear or sqrt -- sqrt is the usual area-proportional bubble-map
       // convention (radius ~ sqrt(value) so AREA reads as proportional to value), but its
       // concavity boosts small ratios more than it looks: even a project at 12% of the
-      // scale point renders at ~35% of the size range under sqrt. Reproduced on DE_LU's
-      // real data -- median radius came out at 22.8 of a 3-48 range, i.e. "small" projects
-      // still looked medium-sized. Linear makes a small project actually look small.
-      const r =
-        magnitude && scaleMagnitude
-          ? MIN_R + (effectiveMaxR - MIN_R) * Math.min(magnitude / scaleMagnitude, 1)
-          : MIN_R;
+      // scale point rendered at ~35% of the size range under sqrt, and still ~19% under
+      // linear (median radius 11.7 of a 3-48 range on real DE_LU data) -- both left
+      // "small" projects looking medium-sized on a zone with thousands of them. Squaring
+      // the percentile-normalized ratio is convex the opposite way: it pushes typical/
+      // small projects much closer to MIN_R while still letting genuinely large ones
+      // (near or above the 95th-percentile scale point) ramp up to the full MAX_R.
+      const ratio = scaleMagnitude && magnitude ? Math.min(magnitude / scaleMagnitude, 1) : 0;
+      const r = magnitude && scaleMagnitude ? MIN_R + (effectiveMaxR - MIN_R) * ratio * ratio : MIN_R;
       return {
         id: s.id,
         x,
