@@ -40,6 +40,10 @@ const MAX_R = 48;
 // 1456x1212 pixel space) -- far enough to read clearly as "in the water", not so far it
 // drifts toward open ocean or off the visible canvas.
 const COASTAL_OFFSET = 36;
+// Direct user threshold, not a derived statistic: any project at or below this magnitude
+// renders at MIN_R flat, no matter how the rest of the zone's capacities are distributed.
+// Radius only starts scaling up once a project exceeds this.
+const SMALL_PROJECT_THRESHOLD_MW = 50;
 
 type WorldFeature = { properties?: { name?: string }; geometry: { type: string; coordinates: unknown } };
 type Ring = [number, number][];
@@ -460,14 +464,13 @@ export default function CountryZoomMap({
     // per-mode (not shared across modes) since aggregate totals are naturally larger
     // than any single project's capacity.
     //
-    // Scaled against the 95th percentile, NOT the raw max, and the ratio is clamped to 1
-    // in the radius formula below -- a zone-wide policy aggregate (DE_LU's -10211MW
-    // lignite phase-out is a national figure, not one physical plant) can be 10-100x any
-    // real individual project's capacity. Scaling everyone against that raw max collapses
-    // the real, meaningful size difference between e.g. a 12MW and a 180MW wind project
-    // into a barely-different sliver near MIN_R -- reproduced on DE_LU's real data. The
-    // true outlier itself still renders at effectiveMaxR (same as scaling against the raw
-    // max would have given it); only everyone else's differentiation is restored.
+    // The "large" end of the scale is still the 95th percentile, NOT the raw max -- a
+    // zone-wide policy aggregate (DE_LU's -10211MW lignite phase-out is a national figure,
+    // not one physical plant) can be 10-100x any real individual project's capacity, and
+    // scaling against that raw max would collapse the real 50-2000MW range of genuine
+    // projects into a barely-different sliver. The true outlier still renders at MAX_R
+    // (clamped, see the radius formula below); only everyone else's differentiation
+    // depends on this reference point.
     const magnitudes = bubbleSources.map((s) => s.capacityMw).filter((c): c is number => c !== null && c !== 0).map(Math.abs);
     const sortedMagnitudes = [...magnitudes].sort((a, b) => a - b);
     const scaleMagnitude = sortedMagnitudes.length > 0 ? percentile(sortedMagnitudes, 0.95) : null;
@@ -494,17 +497,20 @@ export default function CountryZoomMap({
       const [x, y] = geocoded
         ?? (isOffshore ? coastalPoint(s.id, rings, COASTAL_OFFSET) : scatterPoint(s.id, rings, bbox));
       const magnitude = s.capacityMw !== null ? Math.abs(s.capacityMw) : null;
-      // Squared, not linear or sqrt -- sqrt is the usual area-proportional bubble-map
-      // convention (radius ~ sqrt(value) so AREA reads as proportional to value), but its
-      // concavity boosts small ratios more than it looks: even a project at 12% of the
-      // scale point rendered at ~35% of the size range under sqrt, and still ~19% under
-      // linear (median radius 11.7 of a 3-48 range on real DE_LU data) -- both left
-      // "small" projects looking medium-sized on a zone with thousands of them. Squaring
-      // the percentile-normalized ratio is convex the opposite way: it pushes typical/
-      // small projects much closer to MIN_R while still letting genuinely large ones
-      // (near or above the 95th-percentile scale point) ramp up to the full MAX_R.
-      const ratio = scaleMagnitude && magnitude ? Math.min(magnitude / scaleMagnitude, 1) : 0;
-      const r = magnitude && scaleMagnitude ? MIN_R + (effectiveMaxR - MIN_R) * ratio * ratio : MIN_R;
+      // Direct user spec: everything at/below SMALL_PROJECT_THRESHOLD_MW (50MW) renders
+      // flat at MIN_R, no curve-fitting -- replaces an earlier squared-percentile curve
+      // that still left small projects looking medium-sized in practice. Above the
+      // threshold, radius scales LINEARLY up to MAX_R at the 95th-percentile scale point
+      // (clamped beyond that, so the zone-wide retirement/gas outliers still cap out at
+      // MAX_R instead of stretching the scale for every real project below them). If the
+      // scale point itself doesn't clear the threshold (a zone with nothing meaningfully
+      // large), everything just stays at MIN_R rather than dividing by a near-zero range.
+      const r =
+        !magnitude || magnitude <= SMALL_PROJECT_THRESHOLD_MW || !scaleMagnitude || scaleMagnitude <= SMALL_PROJECT_THRESHOLD_MW
+          ? MIN_R
+          : MIN_R +
+            (effectiveMaxR - MIN_R) *
+              Math.min((magnitude - SMALL_PROJECT_THRESHOLD_MW) / (scaleMagnitude - SMALL_PROJECT_THRESHOLD_MW), 1);
       return {
         id: s.id,
         x,
